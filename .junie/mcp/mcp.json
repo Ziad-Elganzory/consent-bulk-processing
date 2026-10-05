@@ -1,9 +1,9 @@
 {
     "mcpServers": {
         "laravel-boost": {
-            "command": "/Users/ganzury/.config/herd-lite/bin/php",
+            "command": "vendor/bin/sail",
             "args": [
-                "/Users/ganzury/Desktop/Projects/laravel/consent-bulk-app/artisan",
+                "artisan",
                 "boost:mcp"
             ]
         }
