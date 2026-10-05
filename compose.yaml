@@ -141,7 +141,7 @@ services:
               sleep 1;
             done;
             mc mb --ignore-existing local/$${AWS_BUCKET};
-            mc anonymous set public local/$${AWS_BUCKET};
+            mc anonymous set none local/$${AWS_BUCKET};
             exit 0;
             "
 networks:
