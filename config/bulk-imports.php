@@ -23,6 +23,15 @@ return [
             'validate_chunk' => env('BULK_IMPORT_VALIDATE_ROUTING_KEY', 'consent.chunk.validate'),
             'assemble_import' => env('BULK_IMPORT_ASSEMBLE_ROUTING_KEY', 'consent.import.assemble'),
         ],
+        // Applied to every bulk import queue.
+        'consumers' => [
+            // Deliveries before a failing message moves to the dead queue.
+            'max_attempts' => (int) env('BULK_IMPORT_CONSUMER_MAX_ATTEMPTS', 3),
+            // How long a failed message waits in the retry queue before the next attempt.
+            'retry_delay_seconds' => (int) env('BULK_IMPORT_CONSUMER_RETRY_DELAY_SECONDS', 30),
+            // Unacknowledged messages one consumer may hold.
+            'prefetch' => (int) env('BULK_IMPORT_CONSUMER_PREFETCH', 1),
+        ],
     ],
 
     'outbox' => [

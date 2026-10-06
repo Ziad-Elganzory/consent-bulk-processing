@@ -3,8 +3,8 @@
 namespace App\Infrastructure\Messaging\Outbox\Services;
 
 use App\Infrastructure\Messaging\Outbox\Contracts\OutboxPublisher;
-use App\Infrastructure\Messaging\Outbox\Exceptions\TransientPublishFailure;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
+use App\Infrastructure\Messaging\Publishing\Exceptions\TransientPublishFailure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;

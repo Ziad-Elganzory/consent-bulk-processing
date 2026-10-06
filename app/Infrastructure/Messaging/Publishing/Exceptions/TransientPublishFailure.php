@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Infrastructure\Messaging\Outbox\Exceptions;
+namespace App\Infrastructure\Messaging\Publishing\Exceptions;
 
 use RuntimeException;
 

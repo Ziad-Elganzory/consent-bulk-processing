@@ -10,7 +10,7 @@ use Illuminate\Console\Command;
 use PhpAmqpLib\Wire\AMQPTable;
 
 #[Signature('rabbitmq:topology:declare')]
-#[Description('Declare the exchanges, queues and bindings of every registered module.')]
+#[Description('Declare the exchanges, queues (with their retry and dead queues) and bindings of every registered module.')]
 class DeclareRabbitMqTopology extends Command
 {
     public function handle(MessagingRegistry $registry, RabbitMQConnection $connection): int
@@ -23,13 +23,17 @@ class DeclareRabbitMqTopology extends Command
             }
 
             foreach ($registry->queues() as $queue) {
-                $channel->queue_declare(
-                    $queue->name,
-                    durable: true,
-                    auto_delete: false,
-                    arguments: new AMQPTable(['x-queue-type' => 'quorum']),
-                );
+                $declarations = [
+                    $queue->name => $queue->workQueueArguments(),
+                    $queue->retryQueueName() => $queue->retryQueueArguments(),
+                    $queue->deadQueueName() => $queue->deadQueueArguments(),
+                ];
 
+                foreach ($declarations as $name => $arguments) {
+                    $channel->queue_declare($name, durable: true, auto_delete: false, arguments: new AMQPTable($arguments));
+                }
+
+                // Only the work queue is bound; retries and dead letters travel through the default exchange.
                 foreach ($queue->routingKeys as $routingKey) {
                     $channel->queue_bind($queue->name, $queue->exchange, $routingKey);
                 }

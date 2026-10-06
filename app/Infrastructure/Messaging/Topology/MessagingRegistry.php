@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Messaging\Topology;
 
+use App\Infrastructure\Messaging\Contracts\MessageHandler;
 use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
 use App\Infrastructure\Messaging\Protocol\MessageContract;
 use InvalidArgumentException;
@@ -62,6 +63,14 @@ final class MessagingRegistry
             if (! isset($this->exchanges[$queue->exchange])) {
                 throw new LogicException("Queue [{$queue->name}] uses undeclared exchange [{$queue->exchange}].");
             }
+
+            if ($queue->handler !== null && ! is_subclass_of($queue->handler, MessageHandler::class)) {
+                throw new LogicException("Handler [{$queue->handler}] of queue [{$queue->name}] does not implement MessageHandler.");
+            }
+
+            if (min($queue->maxAttempts, $queue->retryDelaySeconds, $queue->prefetch) < 1) {
+                throw new LogicException("Queue [{$queue->name}] needs max attempts, retry delay and prefetch of at least 1.");
+            }
         }
 
         foreach (array_keys($this->messages) as $type) {
@@ -85,6 +94,14 @@ final class MessagingRegistry
     public function queues(): array
     {
         return array_values($this->queues);
+    }
+
+    /**
+     * @throws InvalidArgumentException when no module declares the queue
+     */
+    public function queue(string $name): QueueDefinition
+    {
+        return $this->queues[$name] ?? throw new InvalidArgumentException("Queue [{$name}] is not declared.");
     }
 
     /**

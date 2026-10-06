@@ -1,10 +1,10 @@
 <?php
 
 use App\Domains\BulkImport\Messages\ParseRequested;
-use App\Infrastructure\Messaging\Outbox\Exceptions\TransientPublishFailure;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Infrastructure\Messaging\Outbox\Publishers\AmqpOutboxPublisher;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
+use App\Infrastructure\Messaging\Publishing\Exceptions\TransientPublishFailure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
