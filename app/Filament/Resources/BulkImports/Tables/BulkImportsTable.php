@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\BulkImports\Tables;
 
-use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 
@@ -26,9 +25,6 @@ class BulkImportsTable
             ->defaultSort('created_at', 'desc')
             ->filters([
                 //
-            ])
-            ->recordActions([
-                ViewAction::make(),
             ])
             ->toolbarActions([]);
     }

@@ -5,6 +5,9 @@ namespace App\Filament\Resources\BulkImports\Pages;
 use App\Domains\BulkImport\Enums\BulkImportStatus;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\BulkImportResource;
+use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
+use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
+use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -46,10 +49,9 @@ class CreateBulkImport extends CreateRecord
 
         try {
             // S3 metadata lookup; this does not download the CSV contents.
-            $sourceSizeBytes = Storage::disk('s3')->size($sourceObjectKey);
-            $now = now();
+            $sourceSizeBytes = Storage::disk(config('bulk-imports.disk'))->size($sourceObjectKey);
 
-            return DB::transaction(function () use ($data, $sourceObjectKey, $sourceSizeBytes, $now): Model {
+            return DB::transaction(function () use ($data, $sourceObjectKey, $sourceSizeBytes): Model {
                 $record = new BulkImport([
                     ...$data,
                     'user_id' => auth()->id(),
@@ -61,23 +63,18 @@ class CreateBulkImport extends CreateRecord
                 $record->setAttribute($record->getKeyName(), $this->uploadId);
                 $record->save();
 
-                DB::table('outbox_messages')->insert([
-                    'id' => (string) Str::uuid(),
-                    'routing_key' => 'consent.parse.requested',
-                    'payload' => json_encode([
-                        'bulk_import_id' => (string) $record->getKey(),
-                        'source_object_key' => $sourceObjectKey,
-                    ], JSON_THROW_ON_ERROR),
-                    'available_at' => $now,
-                    'attempt_count' => 0,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
+                OutboxMessage::enqueue(MessageEnvelope::make(
+                    message: new ParseRequested(
+                        bulkImportId: (string) $record->getKey(),
+                        sourceObjectKey: $sourceObjectKey,
+                    ),
+                    correlationId: (string) $record->getKey(),
+                ));
 
                 return $record;
             });
         } catch (Throwable $exception) {
-            Storage::disk('s3')->delete($sourceObjectKey);
+            Storage::disk(config('bulk-imports.disk'))->delete($sourceObjectKey);
 
             throw $exception;
         }

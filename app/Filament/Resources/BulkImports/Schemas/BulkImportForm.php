@@ -21,8 +21,8 @@ class BulkImportForm
                         'application/vnd.ms-excel',
                     ])
                     ->rule('extensions:csv')
-                    ->maxSize(512 * 1024)
-                    ->disk('s3')
+                    ->maxSize(config('bulk-imports.max_file_size_kb'))
+                    ->disk(config('bulk-imports.disk'))
                     ->directory(fn (LivewireComponent $livewire): string => "consent/import-{$livewire->uploadId}/source"
                     )
                     ->getUploadedFileNameForStorageUsing(fn (): string => 'source.csv')

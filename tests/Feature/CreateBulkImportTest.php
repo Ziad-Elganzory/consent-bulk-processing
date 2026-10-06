@@ -4,6 +4,9 @@ use App\Domains\BulkImport\Enums\BulkImportStatus;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\Pages\CreateBulkImport;
 use App\Filament\Resources\BulkImports\Pages\ListBulkImports;
+use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
+use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
+use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -14,7 +17,7 @@ use Livewire\Livewire;
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
-    Storage::fake('s3');
+    Storage::fake(config('bulk-imports.disk'));
 
     $this->user = User::factory()->create();
     $this->actingAs($this->user);
@@ -37,16 +40,19 @@ it('creates a queued import owned by the user and writes an outbox message', fun
 
     expect($import->source_object_key)->toBe("consent/import-{$import->getKey()}/source/source.csv");
 
-    Storage::disk('s3')->assertExists($import->source_object_key);
+    Storage::disk(config('bulk-imports.disk'))->assertExists($import->source_object_key);
 
-    $outbox = DB::table('outbox_messages')->sole();
+    $outbox = OutboxMessage::query()->sole();
+    $envelope = MessageEnvelope::fromArray($outbox->payload);
 
     expect($outbox->routing_key)->toBe('consent.parse.requested')
         ->and($outbox->published_at)->toBeNull()
-        ->and(json_decode($outbox->payload, true))->toBe([
-            'bulk_import_id' => $import->getKey(),
-            'source_object_key' => $import->source_object_key,
-        ]);
+        ->and($envelope->messageId)->toBe($outbox->getKey())
+        ->and($envelope->type())->toBe($outbox->routing_key)
+        ->and($envelope->correlationId)->toBe($import->getKey())
+        ->and($envelope->message)->toBeInstanceOf(ParseRequested::class)
+        ->and($envelope->message->bulkImportId)->toBe($import->getKey())
+        ->and($envelope->message->sourceObjectKey)->toBe($import->source_object_key);
 });
 
 it('rejects files that are not csv', function (): void {

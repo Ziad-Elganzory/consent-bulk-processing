@@ -2,7 +2,7 @@
 
 A Laravel application for authenticated bulk imports of consent data from large CSV files. The intended design stores the original upload, intermediate chunks, and generated artifacts in private MinIO storage, while RabbitMQ coordinates asynchronous processing.
 
-> This README is the design reference. The processing pipeline, outbox/inbox flow, and MinIO artifact handling are planned and are not yet implemented.
+> This README is the design reference. Built so far: the upload step, the outbox and its relay, the message envelope and typed messages, and the RabbitMQ topology. Not built yet: inbox deduplication, the parse, validate and assemble workers, and results and downloads on the dashboard.
 
 ## Project shape
 
@@ -97,15 +97,16 @@ Keep source files, chunks, results, and error reports private in MinIO. Use stre
 
 The repository is the fresh Laravel application discussed for this project. At the time of the project review, the installed direct dependencies included Laravel Framework 13.34, Filament 5.9, the RabbitMQ queue driver 15.0.2, and AWS Flysystem 3.35.3. Confirm installed package versions before relying on package-specific APIs.
 
-The current starter configuration needs follow-up before the complete pipeline is runnable:
+Local setup status:
 
-- Configure a dedicated MinIO disk and environment variables for endpoint, credentials, bucket, and path-style access.
-- Keep the bucket private. The existing Compose setup makes it public, which is unsuitable for consent files.
-- Configure the example queue connection and RabbitMQ environment variables to match the local Compose service.
-- Replace the placeholder consent exchanges with the bulk-import queues, bindings, retry, and dead-letter topology.
-- Align the example database configuration with the database service used by Compose. Concurrent workers and outbox/inbox processing need a shared database.
-- Add worker and outbox-relay processes to the local runtime when those parts are implemented.
+- Source files are stored through the S3 driver in the private MinIO bucket. The disk is set with BULK_IMPORT_DISK, and Compose creates the bucket with anonymous access disabled.
+- The example environment matches the Compose services: MySQL, Redis, MinIO, and RabbitMQ. MySQL is required, because the outbox relay claims rows with SKIP LOCKED and concurrent workers share the database.
+- Limits for file size, chunking, retention, and the outbox relay are environment driven. See config/bulk-imports.php and the matching entries in .env.example.
+- The RabbitMQ topology is declared from config/rabbitmq-topology.php with the artisan command rabbitmq:topology:declare. Retry and dead-letter queues are still to add.
+- The outbox relay runs as its own Compose service, named relay. Worker processes will be added the same way as they are built.
 - The nwidart modules package is installed but unused. The agreed design is one BulkImport domain in the Laravel application, so module scaffolding is not required for the demo.
+
+To run it locally: start the services with vendor/bin/sail up -d, run vendor/bin/sail artisan migrate, then declare the topology. Parked outbox messages can be retried with vendor/bin/sail artisan outbox:retry-parked.
 
 ## Decisions to settle before implementing the pipeline
 
