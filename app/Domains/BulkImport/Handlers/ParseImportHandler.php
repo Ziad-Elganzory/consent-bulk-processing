@@ -1,0 +1,130 @@
+<?php
+
+namespace App\Domains\BulkImport\Handlers;
+
+use App\Domains\BulkImport\Enums\BulkImportStatus;
+use App\Domains\BulkImport\Exceptions\UnprocessableFile;
+use App\Domains\BulkImport\Messages\ParseRequested;
+use App\Domains\BulkImport\Messages\ValidateChunk;
+use App\Domains\BulkImport\Models\BulkImport;
+use App\Domains\BulkImport\Models\BulkImportChunk;
+use App\Domains\BulkImport\Services\Csv\CsvChunker;
+use App\Infrastructure\Messaging\Contracts\MessageHandler;
+use App\Infrastructure\Messaging\Inbox\Models\InboxMessage;
+use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
+use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use InvalidArgumentException;
+use Throwable;
+
+/**
+ * Splits an uploaded CSV into chunk files and queues one validation message per chunk.
+ *
+ * Safe to run more than once for the same message:
+ *  - an import that is already past parsing is skipped;
+ *  - chunk files have fixed names, so a retry overwrites them;
+ *  - the inbox claim, the move to validating, the chunk rows and the outbox messages
+ *    commit in one transaction, so a duplicate cannot create a second set.
+ */
+final class ParseImportHandler implements MessageHandler
+{
+    private const int FAILURE_MESSAGE_MAX_LENGTH = 1000;
+
+    public function __construct(private readonly CsvChunker $chunker) {}
+
+    public function handle(MessageEnvelope $envelope): void
+    {
+        $message = $this->message($envelope);
+        $import = BulkImport::query()->find($message->bulkImportId);
+
+        // Queued: start it. Parsing: an earlier attempt stopped part way, so redo it.
+        // Anything else: this message was already handled.
+        if ($import === null || ! in_array($import->status, [BulkImportStatus::Queued, BulkImportStatus::Parsing], true)) {
+            return;
+        }
+
+        BulkImport::query()
+            ->whereKey($import->getKey())
+            ->where('status', BulkImportStatus::Queued->value)
+            ->update(['status' => BulkImportStatus::Parsing->value]);
+
+        try {
+            $chunks = $this->chunker->split($message->sourceObjectKey, $import->original_filename, $this->chunkPrefix($message));
+        } catch (UnprocessableFile $exception) {
+            $this->fail($envelope, $message, $exception->getMessage());
+
+            return;
+        }
+
+        DB::transaction(function () use ($envelope, $message, $chunks): void {
+            if (! InboxMessage::claim(self::class, $envelope->messageId)) {
+                return;
+            }
+
+            $finished = BulkImport::query()
+                ->whereKey($message->bulkImportId)
+                ->where('status', BulkImportStatus::Parsing->value)
+                ->update(['status' => BulkImportStatus::Validating->value]);
+
+            if ($finished === 0) {
+                return;
+            }
+
+            foreach ($chunks as $chunk) {
+                $chunkRow = BulkImportChunk::query()->create([
+                    'bulk_import_id' => $message->bulkImportId,
+                    'sequence' => $chunk['sequence'],
+                    'source_object_key' => $chunk['object_key'],
+                ]);
+
+                OutboxMessage::enqueue(MessageEnvelope::make(
+                    message: new ValidateChunk($message->bulkImportId, $chunkRow->getKey(), $chunk['object_key']),
+                    correlationId: $message->bulkImportId,
+                ));
+            }
+        });
+    }
+
+    public function failed(MessageEnvelope $envelope, Throwable $exception): void
+    {
+        $this->fail($envelope, $this->message($envelope), "Parsing failed: {$exception->getMessage()}");
+    }
+
+    /**
+     * Marks the import failed and removes its chunks. Only an import still being parsed
+     * is changed, so a late duplicate cannot undo a finished one.
+     */
+    private function fail(MessageEnvelope $envelope, ParseRequested $message, string $reason): void
+    {
+        $this->chunker->discard($this->chunkPrefix($message));
+
+        DB::transaction(function () use ($envelope, $message, $reason): void {
+            InboxMessage::claim(self::class, $envelope->messageId);
+
+            BulkImport::query()
+                ->whereKey($message->bulkImportId)
+                ->whereIn('status', [BulkImportStatus::Queued->value, BulkImportStatus::Parsing->value])
+                ->update([
+                    'status' => BulkImportStatus::Failed->value,
+                    'failure_message' => Str::limit($reason, self::FAILURE_MESSAGE_MAX_LENGTH),
+                ]);
+        });
+    }
+
+    private function message(MessageEnvelope $envelope): ParseRequested
+    {
+        return $envelope->message instanceof ParseRequested
+            ? $envelope->message
+            : throw new InvalidArgumentException("ParseImportHandler cannot handle [{$envelope->type()}] messages.");
+    }
+
+    /**
+     * Chunks live next to the source: consent/import-{id}/source/source.csv
+     * becomes consent/import-{id}/chunks.
+     */
+    private function chunkPrefix(ParseRequested $message): string
+    {
+        return dirname($message->sourceObjectKey, 2).'/chunks';
+    }
+}

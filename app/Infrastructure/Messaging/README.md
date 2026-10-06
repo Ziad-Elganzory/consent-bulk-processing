@@ -89,12 +89,14 @@ app/Console/Commands/               entry points
   RelayOutbox.php                   outbox:relay                                     Built
   RetryParkedOutbox.php             outbox:retry-parked                              Built
   DeclareRabbitMqTopology.php       rabbitmq:topology:declare                        Built
-  ConsumeQueue.php                  rabbitmq:consume {queue}                         Planned
+  ConsumeQueue.php                  rabbitmq:consume {queue}                         Built
 
 app/Domains/BulkImport/             what a domain provides
   Messaging/BulkImportMessaging.php its ModuleMessaging declaration                  Built
-  Messages/                         ParseRequested (Built), ValidateChunk, AssembleImport (Planned)
-  Handlers/                         one MessageHandler per consumed queue            Planned
+  Messages/                         ParseRequested, ValidateChunk (Built), AssembleImport (Planned)
+  Handlers/                         ParseImportHandler (Built), validate and assemble (Planned)
+  Services/Csv/CsvChunker.php       file checks and chunk writing for the parse step Built
+  Exceptions/UnprocessableFile.php  a file that can never be processed               Built
 ```
 
 Rules for adding code: group by role, create a folder only when a file needs it, and keep generic code out of `Domains`.
@@ -116,7 +118,7 @@ Rules for adding code: group by role, create a folder only when a file needs it,
 
 ## 6. Declaring messaging
 
-A domain implements one class. Everything here is **Built** except the handler classes and the validate and assemble messages, which arrive with their workers. In the real class the retry and prefetch values come from `config('bulk-imports.messaging.consumers')` through a small helper.
+A domain implements one class. Everything here is **Built** except the validate and assemble handlers and the assemble message, which arrive with their workers. In the real class the retry and prefetch values come from `config('bulk-imports.messaging.consumers')` through a small helper.
 
 ```php
 namespace App\Domains\BulkImport\Messaging;
@@ -334,7 +336,7 @@ Message-level failures do not stop the batch, so one bad row cannot block the ot
 
 ## 10. Consuming
 
-### The consume command (Planned)
+### The consume command (Built)
 
 `rabbitmq:consume {queue}` is a long-running worker for one queue. Everything about the queue comes from its `QueueDefinition`.
 
@@ -342,6 +344,8 @@ Message-level failures do not stop the batch, so one bad row cannot block the ot
 - Waits in a loop with a short timeout so it can check stop conditions.
 - Stops after the message in progress on SIGTERM, SIGINT, or SIGQUIT, and optionally on `--max-messages`, `--max-time`, or a memory limit, so a process manager can restart it fresh.
 - When heartbeat is enabled, registers `PCNTLHeartbeatSender` so heartbeats keep flowing while a handler is busy.
+- Refuses to start for an undeclared queue or a queue without a handler.
+- Runs as a Compose service per queue. `parse-worker` runs the parse queue with `--max-time=3600`, so it restarts hourly on fresh code and memory.
 
 ### Settling a delivery (Built)
 
@@ -425,7 +429,7 @@ Connection timeout is fixed at 3 seconds. Read and write timeouts are the publis
 
 Changing the retry delay changes the retry queue's arguments, so the retry queues must be deleted and declared again.
 
-Planned settings: `RABBITMQ_HEARTBEAT` and consumer stop limits (phase 5).
+`RABBITMQ_HEARTBEAT` (default 60, in `config/queue.php`) sets the heartbeat of consumer connections, with read and write timeouts of twice the heartbeat plus 10 seconds, as php-amqplib requires. The publisher turns heartbeat off for its own short-timeout connection. Consumer stop limits are command options: `--max-messages`, `--max-time`, `--memory`.
 
 ## 13. Commands
 
@@ -434,7 +438,7 @@ Planned settings: `RABBITMQ_HEARTBEAT` and consumer stop limits (phase 5).
 | `outbox:relay {--once} {--sleep=1}` | Built | Publish pending outbox rows. Long-running. |
 | `outbox:retry-parked {id?}` | Built | Give parked rows a fresh set of attempts. |
 | `rabbitmq:topology:declare` | Built | Declare the registry's exchanges, queues, and bindings. Will derive retry and dead queues. |
-| `rabbitmq:consume {queue}` | Planned | Run the handler of one queue. Long-running. |
+| `rabbitmq:consume {queue} {--max-messages=0} {--max-time=0} {--memory=128}` | Built | Run the handler of one queue. Long-running. |
 
 Long-running processes run as Compose services (`relay` today, one per worker later). They load code at start, so restart them after changing their code: `vendor/bin/sail restart relay`.
 
@@ -448,7 +452,8 @@ Long-running processes run as Compose services (`relay` today, one per worker la
 | Topology | Registry tests: the bulk import declaration builds, messages resolve, queues are looked up, consumer settings come from config, retry and dead queue settings are derived, and each contradicting declaration throws |
 | Delivery processing | Feature tests with a recording handler, a mocked channel, and a mocked `ConfirmedPublisher`: handled, retried, dead-lettered (including a failing hook), rejected, and no ack when the copy cannot be published |
 | Inbox | First claim succeeds, a repeat is refused, a rolled-back claim leaves nothing |
-| Handlers (planned) | Feature tests per handler with faked storage: the success path, a duplicate delivery changing nothing, a failure leaving a retryable state |
+| Parse handler | Feature tests with faked storage: chunking by rows and bytes, quoted newlines, BOM, blank rows, wrong column counts passed through, every unprocessable file case, duplicate delivery, resuming a crashed attempt, a storage failure left retryable, and the `failed()` hook |
+| Consume command | Refuses undeclared queues and queues without a handler |
 | Boundary | A Pest architecture test: `App\Infrastructure` must not use `App\Domains` |
 | Real broker | A manual check, not CI: publish a probe, read it back, then clean up (see below) |
 
@@ -474,10 +479,11 @@ Long-running processes run as Compose services (`relay` today, one per worker la
 | 2 | Declare today's topology in `BulkImportMessaging`, switch the declare command and publisher to the registry, remove `config/rabbitmq-topology.php`, compare the broker's topology before and after | Built |
 | 3 | Move messages to `Domains/BulkImport/Messages`, resolve types through the registry instead of the envelope's `match` | Built |
 | 4 | Retry and dead queues from `QueueDefinition`, queue recreation, `ConfirmedPublisher`, `DeliveryProcessor`, inbox | Built |
-| 5 | `rabbitmq:consume`, handlers, Compose services | Planned |
-| 6 | Optional: consumer autoscaling, extraction into a package | Not scheduled |
+| 5 | `rabbitmq:consume`, the parse handler, the `parse-worker` service | Built (validate and assemble handlers come with their steps) |
+| 6 | Consumer autoscaling as in engy-code (`rabbitmq:work` supervisor scaling by backlog), planned with the validation step | Planned |
+| 7 | Optional: extraction into a package | Not scheduled |
 
-Phase 4 was checked on the real broker: 9 queues with the expected arguments, a retried probe returning after the delay with its attempt headers, and a rejected message dead-lettered. Phases 1 to 3 changed structure only. The broker's exchange, queues, and bindings were compared with `rabbitmqctl` before and after and were identical, and all tests stayed green. The boundary architecture test was added with phase 3.
+Phase 5 was checked end to end: a 25,000-row upload became three chunks (10,000, 10,000, 5,000 rows, each with the header) and three validate messages; republishing the same parse message changed nothing; a file with a duplicate column failed once with a clear message and no retry. Phase 4 was checked on the real broker: 9 queues with the expected arguments, a retried probe returning after the delay with its attempt headers, and a rejected message dead-lettered. Phases 1 to 3 changed structure only. The broker's exchange, queues, and bindings were compared with `rabbitmqctl` before and after and were identical, and all tests stayed green. The boundary architecture test was added with phase 3.
 
 ## 17. Decisions
 
@@ -494,10 +500,12 @@ Phase 4 was checked on the real broker: 9 queues with the expected arguments, a 
 | Consumer retry settings | Domain config with `.env` overrides, passed into each `QueueDefinition` | The SDK reads no domain config for topology |
 | Inbox consumer name | The handler's class name | Stable and unique per consumer, no extra config |
 | Inbox claim placement | Inside the transaction that commits the handler's result | A failed handler leaves no claim, so a retry is not mistaken for a duplicate |
-| Consumer heartbeat | As in engy-code: `RABBITMQ_HEARTBEAT` (60 s default), kept alive with `PCNTLHeartbeatSender` | Planned with phase 5 |
+| Consumer heartbeat | As in engy-code: `RABBITMQ_HEARTBEAT` (60 s default), kept alive with `PCNTLHeartbeatSender` | Detects dead connections fast without dropping a busy handler |
+| Unprocessable files | The handler marks the import failed and returns, so the message is acked once | Retrying a broken file only repeats the same failure |
+| Parse checks | File level only (exists, not empty, size, `.csv`, text, UTF-8, header names, a data row, record size). Row-level problems go to validation | A file is rejected only when nothing in it can be used |
 | Outbox ordering | Oldest first, but not strictly ordered across failures | Handlers must not depend on arrival order |
 | CSV rows | Never stored in the database | Memory and privacy. Rows live in object storage. |
-| Autoscaling | Not built. Use Compose replicas. | Not needed yet |
+| Autoscaling | As in engy-code, added with the validation step. One consumer per queue until then. | Only validation benefits from more consumers |
 
 ## 18. Open questions
 

@@ -52,10 +52,12 @@ class ConfirmedPublisher
     {
         $ioTimeout = config('bulk-imports.outbox.publish_timeout_seconds') + 2;
 
+        // Short timeouts so a slow broker fails fast. Heartbeat is off because it would need longer ones.
         $channel = $this->connection->channel([
             'connection_timeout' => self::CONNECTION_TIMEOUT_SECONDS,
             'read_timeout' => $ioTimeout,
             'write_timeout' => $ioTimeout,
+            'heartbeat' => 0,
         ]);
 
         if ($channel === $this->channel) {

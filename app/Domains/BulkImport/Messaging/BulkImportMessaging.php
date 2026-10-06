@@ -2,7 +2,9 @@
 
 namespace App\Domains\BulkImport\Messaging;
 
+use App\Domains\BulkImport\Handlers\ParseImportHandler;
 use App\Domains\BulkImport\Messages\ParseRequested;
+use App\Domains\BulkImport\Messages\ValidateChunk;
 use App\Infrastructure\Messaging\Contracts\MessageHandler;
 use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
 use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
@@ -21,37 +23,35 @@ final class BulkImportMessaging implements ModuleMessaging
 
     public function queues(): array
     {
-        $queues = config('bulk-imports.messaging.queues');
-        $routingKeys = config('bulk-imports.messaging.routing_keys');
-
-        // Handlers are added as each worker is built.
+        // The validate and assemble handlers are added as those workers are built.
         return [
-            $this->queue($queues['parse'], [ParseRequested::type()]),
-            $this->queue($queues['validate'], [$routingKeys['validate_chunk']]),
-            $this->queue($queues['assemble'], [$routingKeys['assemble_import']]),
+            $this->queue('parse', [ParseRequested::type()], ParseImportHandler::class),
+            $this->queue('validate', [ValidateChunk::type()]),
+            $this->queue('assemble', [config('bulk-imports.messaging.routing_keys.assemble_import')]),
         ];
     }
 
     public function messages(): array
     {
-        return [ParseRequested::class];
+        return [ParseRequested::class, ValidateChunk::class];
     }
 
     /**
+     * @param  string  $key  the queue's key under messaging.queues
      * @param  list<string>  $routingKeys
      * @param  class-string<MessageHandler>|null  $handler
      */
-    private function queue(string $name, array $routingKeys, ?string $handler = null): QueueDefinition
+    private function queue(string $key, array $routingKeys, ?string $handler = null): QueueDefinition
     {
-        $consumers = config('bulk-imports.messaging.consumers');
+        $messaging = config('bulk-imports.messaging');
 
         return new QueueDefinition(
-            name: $name,
-            exchange: config('bulk-imports.messaging.exchange'),
+            name: $messaging['queues'][$key],
+            exchange: $messaging['exchange'],
             routingKeys: $routingKeys,
-            maxAttempts: $consumers['max_attempts'],
-            retryDelaySeconds: $consumers['retry_delay_seconds'],
-            prefetch: $consumers['prefetch'],
+            maxAttempts: $messaging['consumers']['max_attempts'],
+            retryDelaySeconds: $messaging['consumers']['retry_delay_seconds'],
+            prefetch: $messaging['consumers']['prefetch'],
             handler: $handler,
         );
     }

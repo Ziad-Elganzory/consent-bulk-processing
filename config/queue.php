@@ -86,7 +86,13 @@ return [
                     'vhost' => env('RABBITMQ_VHOST', '/'),
                 ],
             ],
-            'options' => [],
+            // Consumers keep the connection alive with heartbeats. php-amqplib requires
+            // read and write timeouts of at least twice the heartbeat.
+            'options' => [
+                'heartbeat' => (int) env('RABBITMQ_HEARTBEAT', 60),
+                'read_timeout' => (int) env('RABBITMQ_HEARTBEAT', 60) * 2 + 10,
+                'write_timeout' => (int) env('RABBITMQ_HEARTBEAT', 60) * 2 + 10,
+            ],
             'after_commit' => false,
         ],
 

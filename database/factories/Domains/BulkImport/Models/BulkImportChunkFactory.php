@@ -30,7 +30,7 @@ class BulkImportChunkFactory extends Factory
             'status' => BulkImportChunkStatus::Pending,
             'valid_rows' => 0,
             'invalid_rows' => 0,
-            'source_object_key' => 'consent/import-example/chunks/000001.csv',
+            'source_object_key' => 'consent/import-example/chunks/chunk-000001.csv',
             'result_object_key' => null,
             'error_object_key' => null,
             'failure_message' => null,
