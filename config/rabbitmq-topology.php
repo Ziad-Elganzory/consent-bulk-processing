@@ -2,11 +2,11 @@
 
 return [
     'exchanges' => [
-        
+
     ],
 
     'queues' => [
-        
+
     ],
 
     'bindings' => [

@@ -12,6 +12,8 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class BulkImportFactory extends Factory
 {
+    protected $model = BulkImport::class;
+
     /**
      * Define the model's default state.
      *

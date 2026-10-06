@@ -109,8 +109,16 @@ The current starter configuration needs follow-up before the complete pipeline i
 
 ## Decisions to settle before implementing the pipeline
 
-1. Does a valid row call the consent service, or does this demo only validate and produce files?
+1. Does a valid row call the consent service, or does this demo only validate and produce files? 
+- this demo is only for reciving the huge file and chunk it and validate it and then assemble it , we will have 3 workers , 1 for chunking , 1 for validation , and 1 for assembly. 
 2. Does the final CSV contain valid rows only, or all rows with a processing status? Should rejected rows also be written to a separate report?
+
+rows that fails the validation shouldn't be uploaded to the minio it should have a file with the rejected rows in minio
+
 3. What are the required headers, row-level validation rules, and schema version?
+
+i want to make the validation step dynaminc and extendable , where i can sepecify the validation rules myself and change it any time i want.
+
 4. What file-size, row-size, chunk-size, retry, and artifact-retention limits should apply?
 
+we should sepecify a config file with these data so we can decide the amount later in the env

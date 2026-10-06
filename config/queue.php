@@ -90,7 +90,6 @@ return [
             'after_commit' => false,
         ],
 
-
         'deferred' => [
             'driver' => 'deferred',
         ],
