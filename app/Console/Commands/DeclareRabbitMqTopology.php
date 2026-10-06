@@ -2,62 +2,44 @@
 
 namespace App\Console\Commands;
 
+use App\Infrastructure\Messaging\Connection\RabbitMQConnection;
+use App\Infrastructure\Messaging\Topology\MessagingRegistry;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
-use VladimirYuldashev\LaravelQueueRabbitMQ\Queue\Connectors\RabbitMQConnector;
+use PhpAmqpLib\Wire\AMQPTable;
 
 #[Signature('rabbitmq:topology:declare')]
-#[Description('Declare the application RabbitMQ topology.')]
+#[Description('Declare the exchanges, queues and bindings of every registered module.')]
 class DeclareRabbitMqTopology extends Command
 {
-    protected $signature = 'rabbitmq:topology:declare';
-
-    protected $description = 'Declare the application RabbitMQ topology.';
-
-    public function handle(RabbitMQConnector $connector): int
+    public function handle(MessagingRegistry $registry, RabbitMQConnection $connection): int
     {
-        $topology = config('rabbitmq-topology');
-        $rabbitMq = $connector->connect(config('queue.connections.rabbitmq'));
+        $channel = $connection->channel();
 
         try {
-            foreach ($topology['exchanges'] as $name => $exchange) {
-                $rabbitMq->declareExchange(
-                    $name,
-                    $exchange['type'],
-                    $exchange['durable'],
-                    $exchange['auto_delete'],
-                );
+            foreach ($registry->exchanges() as $exchange) {
+                $channel->exchange_declare($exchange->name, $exchange->type, durable: true, auto_delete: false);
             }
 
-            foreach ($topology['queues'] as $name => $queue) {
-                $arguments = $queue['arguments'] ?? [];
+            foreach ($registry->queues() as $queue) {
+                $channel->queue_declare(
+                    $queue->name,
+                    durable: true,
+                    auto_delete: false,
+                    arguments: new AMQPTable(['x-queue-type' => 'quorum']),
+                );
 
-                if ($queue['type'] === 'quorum') {
-                    $arguments['x-queue-type'] = 'quorum';
+                foreach ($queue->routingKeys as $routingKey) {
+                    $channel->queue_bind($queue->name, $queue->exchange, $routingKey);
                 }
-
-                $rabbitMq->declareQueue(
-                    $name,
-                    $queue['durable'],
-                    $queue['auto_delete'],
-                    $arguments,
-                );
             }
-
-            foreach ($topology['bindings'] as $binding) {
-                $rabbitMq->bindQueue(
-                    $binding['queue'],
-                    $binding['exchange'],
-                    $binding['routing_key'],
-                );
-            }
-
-            $this->info('RabbitMQ topology declared successfully.');
-
-            return self::SUCCESS;
         } finally {
-            $rabbitMq->close();
+            $connection->close();
         }
+
+        $this->info('RabbitMQ topology declared successfully.');
+
+        return self::SUCCESS;
     }
 }

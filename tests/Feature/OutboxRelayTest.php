@@ -1,5 +1,6 @@
 <?php
 
+use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Infrastructure\Messaging\Outbox\Contracts\OutboxPublisher;
 use App\Infrastructure\Messaging\Outbox\Exceptions\TransientPublishFailure;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
@@ -48,7 +49,7 @@ function fakeOutboxPublisher(bool $fail = false, ?Closure $handler = null): obje
 function pendingOutboxMessage(array $attributes = []): OutboxMessage
 {
     $message = OutboxMessage::create([
-        'routing_key' => 'consent.parse.requested',
+        'routing_key' => ParseRequested::type(),
         'payload' => ['bulk_import_id' => 'abc'],
     ]);
 

@@ -3,11 +3,11 @@
 namespace App\Filament\Resources\BulkImports\Pages;
 
 use App\Domains\BulkImport\Enums\BulkImportStatus;
+use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\BulkImportResource;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;

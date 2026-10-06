@@ -102,7 +102,7 @@ Local setup status:
 - Source files are stored through the S3 driver in the private MinIO bucket. The disk is set with BULK_IMPORT_DISK, and Compose creates the bucket with anonymous access disabled.
 - The example environment matches the Compose services: MySQL, Redis, MinIO, and RabbitMQ. MySQL is required, because the outbox relay claims rows with SKIP LOCKED and concurrent workers share the database.
 - Limits for file size, chunking, retention, and the outbox relay are environment driven. See config/bulk-imports.php and the matching entries in .env.example.
-- The RabbitMQ topology is declared from config/rabbitmq-topology.php with the artisan command rabbitmq:topology:declare. Retry and dead-letter queues are still to add.
+- The RabbitMQ topology is declared in code (app/Domains/BulkImport/Messaging/BulkImportMessaging.php) and applied with the artisan command rabbitmq:topology:declare. Retry and dead-letter queues are still to add. See app/Infrastructure/Messaging/README.md for the messaging SDK.
 - The outbox relay runs as its own Compose service, named relay. Worker processes will be added the same way as they are built.
 - The nwidart modules package is installed but unused. The agreed design is one BulkImport domain in the Laravel application, so module scaffolding is not required for the demo.
 

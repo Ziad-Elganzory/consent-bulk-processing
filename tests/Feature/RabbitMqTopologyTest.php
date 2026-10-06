@@ -1,42 +1,71 @@
 <?php
 
-use App\Infrastructure\Messaging\Protocol\MessageContract;
+use App\Domains\BulkImport\Messages\ParseRequested;
+use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
+use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
+use App\Infrastructure\Messaging\Topology\MessagingRegistry;
+use App\Infrastructure\Messaging\Topology\QueueDefinition;
 
-/**
- * @return list<class-string<MessageContract>>
- */
-function messageClasses(): array
+function moduleMessaging(array $exchanges, array $queues, array $messages = []): ModuleMessaging
 {
-    return collect(glob(app_path('Infrastructure/Messaging/Protocol/Messages/*.php')))
-        ->map(fn (string $path): string => 'App\\Infrastructure\\Messaging\\Protocol\\Messages\\'.basename($path, '.php'))
-        ->all();
+    return new class($exchanges, $queues, $messages) implements ModuleMessaging
+    {
+        public function __construct(private array $exchanges, private array $queues, private array $messages) {}
+
+        public function exchanges(): array
+        {
+            return $this->exchanges;
+        }
+
+        public function queues(): array
+        {
+            return $this->queues;
+        }
+
+        public function messages(): array
+        {
+            return $this->messages;
+        }
+    };
 }
 
-it('declares the exchange the relay publishes to', function (): void {
-    $topology = config('rabbitmq-topology');
+it('builds the registry from the bulk import declaration', function (): void {
+    $registry = app(MessagingRegistry::class);
 
-    expect($topology['exchanges'])->toHaveKey($topology['command_exchange']);
+    expect(collect($registry->queues())->pluck('name')->all())->toBe(array_values(config('bulk-imports.messaging.queues')))
+        ->and($registry->exchangeFor(ParseRequested::type()))->toBe(config('bulk-imports.messaging.exchange'));
 });
 
-it('binds only declared exchanges and queues', function (): void {
-    $topology = config('rabbitmq-topology');
+it('rebuilds a registered message from its type and data', function (): void {
+    $message = app(MessagingRegistry::class)->message(ParseRequested::type(), [
+        'bulk_import_id' => 'import-1',
+        'source_object_key' => 'consent/import-1/source/source.csv',
+    ]);
 
-    foreach ($topology['bindings'] as $binding) {
-        expect($topology['exchanges'])->toHaveKey($binding['exchange'])
-            ->and($topology['queues'])->toHaveKey($binding['queue']);
-    }
+    expect($message)->toBeInstanceOf(ParseRequested::class);
 });
 
-it('binds every message type to a queue on the command exchange', function (): void {
-    $topology = config('rabbitmq-topology');
-    $boundKeys = collect($topology['bindings'])
-        ->where('exchange', $topology['command_exchange'])
-        ->pluck('routing_key')
-        ->all();
+it('rejects an unknown message type', function (): void {
+    app(MessagingRegistry::class)->message('consent.unknown', []);
+})->throws(InvalidArgumentException::class, 'Unsupported message type');
 
-    expect(messageClasses())->not->toBeEmpty();
-
-    foreach (messageClasses() as $messageClass) {
-        expect($boundKeys)->toContain($messageClass::type());
-    }
-});
+it('rejects contradicting declarations', function (ModuleMessaging $module, string $error): void {
+    expect(fn () => new MessagingRegistry([$module]))->toThrow(LogicException::class, $error);
+})->with([
+    'queue on an undeclared exchange' => fn () => [
+        moduleMessaging([], [new QueueDefinition('q', 'missing', ['k'])]),
+        'undeclared exchange',
+    ],
+    'routing key bound to two queues' => fn () => [
+        moduleMessaging([new ExchangeDefinition('x')], [new QueueDefinition('a', 'x', ['k']), new QueueDefinition('b', 'x', ['k'])]),
+        'more than one queue',
+    ],
+    'queue declared twice' => fn () => [
+        moduleMessaging([new ExchangeDefinition('x')], [new QueueDefinition('a', 'x', ['k']), new QueueDefinition('a', 'x', ['j'])]),
+        'declared twice',
+    ],
+    'message without a binding' => fn () => [
+        moduleMessaging([new ExchangeDefinition('x')], [], [ParseRequested::class]),
+        'not bound',
+    ],
+]);

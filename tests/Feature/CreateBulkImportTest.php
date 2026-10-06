@@ -1,12 +1,11 @@
 <?php
 
 use App\Domains\BulkImport\Enums\BulkImportStatus;
+use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\Pages\CreateBulkImport;
 use App\Filament\Resources\BulkImports\Pages\ListBulkImports;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
-use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -43,9 +42,9 @@ it('creates a queued import owned by the user and writes an outbox message', fun
     Storage::disk(config('bulk-imports.disk'))->assertExists($import->source_object_key);
 
     $outbox = OutboxMessage::query()->sole();
-    $envelope = MessageEnvelope::fromArray($outbox->payload);
+    $envelope = $outbox->envelope();
 
-    expect($outbox->routing_key)->toBe('consent.parse.requested')
+    expect($outbox->routing_key)->toBe(ParseRequested::type())
         ->and($outbox->published_at)->toBeNull()
         ->and($envelope->messageId)->toBe($outbox->getKey())
         ->and($envelope->type())->toBe($outbox->routing_key)

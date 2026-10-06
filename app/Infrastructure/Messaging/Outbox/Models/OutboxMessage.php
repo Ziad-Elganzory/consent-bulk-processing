@@ -3,6 +3,7 @@
 namespace App\Infrastructure\Messaging\Outbox\Models;
 
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
+use App\Infrastructure\Messaging\Topology\MessagingRegistry;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
@@ -51,7 +52,7 @@ class OutboxMessage extends Model
      */
     public function envelope(): MessageEnvelope
     {
-        return MessageEnvelope::fromArray($this->payload);
+        return MessageEnvelope::fromArray($this->payload, app(MessagingRegistry::class));
     }
 
     /**

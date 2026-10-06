@@ -1,13 +1,20 @@
 <?php
 
+use App\Domains\BulkImport\Messages\ParseRequested;
+use App\Domains\BulkImport\Messaging\BulkImportMessaging;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
+use App\Infrastructure\Messaging\Topology\MessagingRegistry;
+
+function bulkImportRegistry(): MessagingRegistry
+{
+    return new MessagingRegistry([new BulkImportMessaging]);
+}
 
 function parseRequestedEnvelopePayload(array $overrides = []): array
 {
     return [
         'message_id' => '0b8f6c1e-6f55-4c1a-9a4e-0d1a8e1c2b3d',
-        'type' => 'consent.parse.requested',
+        'type' => ParseRequested::type(),
         'correlation_id' => 'import-1',
         'occurred_at' => '2026-10-06T09:39:18+00:00',
         'data' => ['bulk_import_id' => 'import-1', 'source_object_key' => 'consent/import-1/source/source.csv'],
@@ -21,7 +28,7 @@ it('builds an envelope with a generated id and a timestamp', function (): void {
     $envelope = MessageEnvelope::make($message, correlationId: 'import-1');
 
     expect($envelope->messageId)->toBeUuid()
-        ->and($envelope->type())->toBe('consent.parse.requested')
+        ->and($envelope->type())->toBe(ParseRequested::type())
         ->and($envelope->correlationId)->toBe('import-1')
         ->and($envelope->message)->toBe($message)
         ->and($envelope->occurredAt->isToday())->toBeTrue();
@@ -38,7 +45,7 @@ it('serialises the type, correlation id and message data', function (): void {
 
     expect($envelope->toArray())->toMatchArray([
         'message_id' => $envelope->messageId,
-        'type' => 'consent.parse.requested',
+        'type' => ParseRequested::type(),
         'correlation_id' => 'import-1',
         'data' => ['bulk_import_id' => 'import-1', 'source_object_key' => 'key'],
     ]);
@@ -47,14 +54,14 @@ it('serialises the type, correlation id and message data', function (): void {
 it('survives a round trip through an array', function (): void {
     $envelope = MessageEnvelope::make(new ParseRequested('import-1', 'key'), 'import-1');
 
-    $restored = MessageEnvelope::fromArray($envelope->toArray());
+    $restored = MessageEnvelope::fromArray($envelope->toArray(), bulkImportRegistry());
 
     expect($restored->toArray())->toBe($envelope->toArray())
         ->and($restored->message)->toBeInstanceOf(ParseRequested::class);
 });
 
 it('reads a valid payload into a typed message', function (): void {
-    $envelope = MessageEnvelope::fromArray(parseRequestedEnvelopePayload());
+    $envelope = MessageEnvelope::fromArray(parseRequestedEnvelopePayload(), bulkImportRegistry());
 
     expect($envelope->message)->toBeInstanceOf(ParseRequested::class)
         ->and($envelope->message->bulkImportId)->toBe('import-1')
@@ -62,7 +69,7 @@ it('reads a valid payload into a typed message', function (): void {
 });
 
 it('rejects an invalid envelope', function (array $overrides): void {
-    MessageEnvelope::fromArray(parseRequestedEnvelopePayload($overrides));
+    MessageEnvelope::fromArray(parseRequestedEnvelopePayload($overrides), bulkImportRegistry());
 })->throws(InvalidArgumentException::class)->with([
     'missing message id' => [['message_id' => null]],
     'empty type' => [['type' => '']],
@@ -77,18 +84,18 @@ it('rejects an invalid envelope', function (array $overrides): void {
 it('round trips through json', function (): void {
     $envelope = MessageEnvelope::make(new ParseRequested('import-1', 'key'), 'import-1');
 
-    $restored = MessageEnvelope::fromJson($envelope->toJson());
+    $restored = MessageEnvelope::fromJson($envelope->toJson(), bulkImportRegistry());
 
     expect($restored->toArray())->toBe($envelope->toArray());
 });
 
 it('rejects json that is not an object', function (string $json): void {
-    MessageEnvelope::fromJson($json);
+    MessageEnvelope::fromJson($json, bulkImportRegistry());
 })->throws(InvalidArgumentException::class)->with([
     'list' => ['[1, 2]'],
     'scalar' => ['"text"'],
 ]);
 
 it('rejects malformed json', function (): void {
-    MessageEnvelope::fromJson('{not json');
+    MessageEnvelope::fromJson('{not json', bulkImportRegistry());
 })->throws(JsonException::class);

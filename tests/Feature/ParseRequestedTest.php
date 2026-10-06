@@ -1,9 +1,11 @@
 <?php
 
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
+use App\Domains\BulkImport\Messages\ParseRequested;
 
-it('uses the parse routing key as its type', function (): void {
-    expect(ParseRequested::type())->toBe('consent.parse.requested');
+it('uses the configured parse routing key as its type', function (): void {
+    config(['bulk-imports.messaging.routing_keys.parse_requested' => 'custom.parse']);
+
+    expect(ParseRequested::type())->toBe('custom.parse');
 });
 
 it('round trips through its data', function (): void {

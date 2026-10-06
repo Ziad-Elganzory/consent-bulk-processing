@@ -2,7 +2,7 @@
 
 namespace App\Infrastructure\Messaging\Protocol;
 
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
+use App\Infrastructure\Messaging\Topology\MessagingRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -70,7 +70,7 @@ final readonly class MessageEnvelope
      * @throws JsonException
      * @throws InvalidArgumentException when the JSON is not a valid envelope
      */
-    public static function fromJson(string $json): self
+    public static function fromJson(string $json, MessagingRegistry $registry): self
     {
         $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
 
@@ -78,7 +78,7 @@ final readonly class MessageEnvelope
             throw new InvalidArgumentException('The message envelope must be a JSON object.');
         }
 
-        return self::fromArray($payload);
+        return self::fromArray($payload, $registry);
     }
 
     /**
@@ -86,7 +86,7 @@ final readonly class MessageEnvelope
      *
      * @throws InvalidArgumentException when the payload is not a valid envelope
      */
-    public static function fromArray(array $payload): self
+    public static function fromArray(array $payload, MessagingRegistry $registry): self
     {
         $data = $payload['data'] ?? null;
 
@@ -102,18 +102,11 @@ final readonly class MessageEnvelope
             throw new InvalidArgumentException('The [occurred_at] field must be a valid date.');
         }
 
-        $type = MessageData::requiredString($payload, 'type');
-
-        $message = match ($type) {
-            ParseRequested::type() => ParseRequested::fromData($data),
-            default => throw new InvalidArgumentException("Unsupported message type [{$type}]."),
-        };
-
         return new self(
             messageId: MessageData::requiredString($payload, 'message_id'),
             correlationId: MessageData::requiredString($payload, 'correlation_id'),
             occurredAt: $occurredAt,
-            message: $message,
+            message: $registry->message(MessageData::requiredString($payload, 'type'), $data),
         );
     }
 }

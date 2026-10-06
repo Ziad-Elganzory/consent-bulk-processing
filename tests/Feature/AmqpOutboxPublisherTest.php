@@ -1,10 +1,10 @@
 <?php
 
+use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Infrastructure\Messaging\Outbox\Exceptions\TransientPublishFailure;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Infrastructure\Messaging\Outbox\Publishers\AmqpOutboxPublisher;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
-use App\Infrastructure\Messaging\Protocol\Messages\ParseRequested;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -34,7 +34,7 @@ it('rebuilds a typed envelope from the stored payload', function (): void {
 
 it('refuses to publish a message whose payload is not a valid envelope', function (): void {
     $message = OutboxMessage::create([
-        'routing_key' => 'consent.parse.requested',
+        'routing_key' => ParseRequested::type(),
         'payload' => ['bulk_import_id' => 'abc'],
     ]);
 
@@ -53,14 +53,14 @@ it('refuses to publish a message of an unknown type', function (): void {
 
 it('refuses to publish when the routing key does not match the envelope type', function (): void {
     $message = validOutboxMessage();
-    $message->forceFill(['routing_key' => 'consent.chunk.validate'])->save();
+    $message->forceFill(['routing_key' => config('bulk-imports.messaging.routing_keys.validate_chunk')])->save();
 
     app(AmqpOutboxPublisher::class)->publish($message);
 })->throws(RuntimeException::class, 'routing key');
 
 it('records the error and does not publish an invalid row through the relay', function (): void {
     $message = OutboxMessage::create([
-        'routing_key' => 'consent.parse.requested',
+        'routing_key' => ParseRequested::type(),
         'payload' => ['bulk_import_id' => 'abc'],
     ]);
 

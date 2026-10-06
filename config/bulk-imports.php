@@ -9,6 +9,22 @@ return [
     'max_row_bytes' => (int) env('BULK_IMPORT_MAX_ROW_BYTES', 16 * 1024),
     'artifact_retention_days' => (int) env('BULK_IMPORT_RETENTION_DAYS', 7),
 
+    // RabbitMQ names. Each routing key is also the type of its message, so change a
+    // routing key only while no outbox rows of that type are waiting.
+    'messaging' => [
+        'exchange' => env('BULK_IMPORT_EXCHANGE', 'consent.commands'),
+        'queues' => [
+            'parse' => env('BULK_IMPORT_PARSE_QUEUE', 'consent.parse'),
+            'validate' => env('BULK_IMPORT_VALIDATE_QUEUE', 'consent.validate'),
+            'assemble' => env('BULK_IMPORT_ASSEMBLE_QUEUE', 'consent.assemble'),
+        ],
+        'routing_keys' => [
+            'parse_requested' => env('BULK_IMPORT_PARSE_ROUTING_KEY', 'consent.parse.requested'),
+            'validate_chunk' => env('BULK_IMPORT_VALIDATE_ROUTING_KEY', 'consent.chunk.validate'),
+            'assemble_import' => env('BULK_IMPORT_ASSEMBLE_ROUTING_KEY', 'consent.import.assemble'),
+        ],
+    ],
+
     'outbox' => [
         'batch_size' => (int) env('OUTBOX_BATCH_SIZE', 10),
         // The longest the relay waits for the broker to confirm one message.

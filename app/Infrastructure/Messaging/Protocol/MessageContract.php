@@ -6,7 +6,7 @@ namespace App\Infrastructure\Messaging\Protocol;
  * A typed message carried inside a MessageEnvelope.
  *
  * The type is also the routing key the message is published with, so it must
- * match a binding in config/rabbitmq-topology.php.
+ * be bound to a queue in a ModuleMessaging declaration.
  */
 interface MessageContract
 {

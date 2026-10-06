@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Infrastructure\Messaging\Protocol\Messages;
+namespace App\Domains\BulkImport\Messages;
 
 use App\Infrastructure\Messaging\Protocol\MessageContract;
 use App\Infrastructure\Messaging\Protocol\MessageData;
@@ -17,7 +17,7 @@ final readonly class ParseRequested implements MessageContract
 
     public static function type(): string
     {
-        return 'consent.parse.requested';
+        return config('bulk-imports.messaging.routing_keys.parse_requested');
     }
 
     /**
