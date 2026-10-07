@@ -10,7 +10,6 @@ use App\Domains\BulkImport\Models\BulkImport;
 use App\Domains\BulkImport\Models\BulkImportChunk;
 use App\Domains\BulkImport\Services\Csv\CsvChunker;
 use App\Infrastructure\Messaging\Contracts\MessageHandler;
-use App\Infrastructure\Messaging\Inbox\Models\InboxMessage;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Illuminate\Support\Facades\DB;
@@ -24,8 +23,8 @@ use Throwable;
  * Safe to run more than once for the same message:
  *  - an import that is already past parsing is skipped;
  *  - chunk files have fixed names, so a retry overwrites them;
- *  - the inbox claim, the move to validating, the chunk rows and the outbox messages
- *    commit in one transaction, so a duplicate cannot create a second set.
+ *  - the move to validating, the chunk rows and the outbox messages commit in one
+ *    transaction, and only the run that wins the move to validating creates them.
  */
 final class ParseImportHandler implements MessageHandler
 {
@@ -52,16 +51,13 @@ final class ParseImportHandler implements MessageHandler
         try {
             $chunks = $this->chunker->split($message->sourceObjectKey, $import->original_filename, $this->chunkPrefix($message));
         } catch (UnprocessableFile $exception) {
-            $this->fail($envelope, $message, $exception->getMessage());
+            $this->fail($message, $exception->getMessage());
 
             return;
         }
 
-        DB::transaction(function () use ($envelope, $message, $chunks): void {
-            if (! InboxMessage::claim(self::class, $envelope->messageId)) {
-                return;
-            }
-
+        DB::transaction(function () use ($message, $chunks): void {
+            // Exactly one run can change parsing to validating. A duplicate gets 0 rows and stops.
             $finished = BulkImport::query()
                 ->whereKey($message->bulkImportId)
                 ->where('status', BulkImportStatus::Parsing->value)
@@ -88,28 +84,24 @@ final class ParseImportHandler implements MessageHandler
 
     public function failed(MessageEnvelope $envelope, Throwable $exception): void
     {
-        $this->fail($envelope, $this->message($envelope), "Parsing failed: {$exception->getMessage()}");
+        $this->fail($this->message($envelope), "Parsing failed: {$exception->getMessage()}");
     }
 
     /**
      * Marks the import failed and removes its chunks. Only an import still being parsed
      * is changed, so a late duplicate cannot undo a finished one.
      */
-    private function fail(MessageEnvelope $envelope, ParseRequested $message, string $reason): void
+    private function fail(ParseRequested $message, string $reason): void
     {
         $this->chunker->discard($this->chunkPrefix($message));
 
-        DB::transaction(function () use ($envelope, $message, $reason): void {
-            InboxMessage::claim(self::class, $envelope->messageId);
-
-            BulkImport::query()
-                ->whereKey($message->bulkImportId)
-                ->whereIn('status', [BulkImportStatus::Queued->value, BulkImportStatus::Parsing->value])
-                ->update([
-                    'status' => BulkImportStatus::Failed->value,
-                    'failure_message' => Str::limit($reason, self::FAILURE_MESSAGE_MAX_LENGTH),
-                ]);
-        });
+        BulkImport::query()
+            ->whereKey($message->bulkImportId)
+            ->whereIn('status', [BulkImportStatus::Queued->value, BulkImportStatus::Parsing->value])
+            ->update([
+                'status' => BulkImportStatus::Failed->value,
+                'failure_message' => Str::limit($reason, self::FAILURE_MESSAGE_MAX_LENGTH),
+            ]);
     }
 
     private function message(MessageEnvelope $envelope): ParseRequested

@@ -7,7 +7,6 @@ use App\Domains\BulkImport\Messages\ValidateChunk;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Domains\BulkImport\Models\BulkImportChunk;
 use App\Domains\BulkImport\Services\Csv\CsvChunker;
-use App\Infrastructure\Messaging\Inbox\Models\InboxMessage;
 use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -120,8 +119,23 @@ it('handles a duplicate delivery only once', function (): void {
     parseImport($import, $envelope);
 
     expect(BulkImportChunk::query()->count())->toBe(1)
-        ->and(OutboxMessage::query()->count())->toBe(1)
-        ->and(InboxMessage::query()->count())->toBe(1);
+        ->and(OutboxMessage::query()->count())->toBe(1);
+});
+
+it('creates nothing when another worker finished the import while this one was parsing', function (): void {
+    $import = importWithCsv("phone,email\n1,a\n");
+    $this->mock(CsvChunker::class, fn (MockInterface $mock) => $mock->shouldReceive('split')->andReturnUsing(function () use ($import): array {
+        // The other worker wins the race to validating while this one is still splitting the file.
+        $import->update(['status' => BulkImportStatus::Validating]);
+
+        return [['sequence' => 1, 'object_key' => chunkKey($import, 1)]];
+    }));
+
+    parseImport($import);
+
+    expect($import->refresh()->status)->toBe(BulkImportStatus::Validating)
+        ->and(BulkImportChunk::query()->count())->toBe(0)
+        ->and(OutboxMessage::query()->count())->toBe(0);
 });
 
 it('finishes an import that an earlier attempt left in parsing, overwriting its chunk files', function (): void {
@@ -167,8 +181,7 @@ it('fails the import without retrying when the file is not processable', functio
         ->and($import->failure_message)->toContain($reason)
         ->and(chunkContents($import, 1))->toBeNull()
         ->and(BulkImportChunk::query()->count())->toBe(0)
-        ->and(OutboxMessage::query()->count())->toBe(0)
-        ->and(InboxMessage::query()->count())->toBe(1);
+        ->and(OutboxMessage::query()->count())->toBe(0);
 })->with([
     'missing file' => [null, 'consents.csv', 'the uploaded file is missing'],
     'empty file' => ['', 'consents.csv', 'it is empty'],
@@ -208,8 +221,7 @@ it('lets a storage failure be retried, leaving the import in parsing', function 
 
     expect(fn () => parseImport($import))->toThrow(RuntimeException::class, 'MinIO is down');
 
-    expect($import->refresh()->status)->toBe(BulkImportStatus::Parsing)
-        ->and(InboxMessage::query()->count())->toBe(0);
+    expect($import->refresh()->status)->toBe(BulkImportStatus::Parsing);
 });
 
 it('marks the import failed and removes its chunks when the last attempt fails', function (): void {

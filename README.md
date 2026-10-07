@@ -2,7 +2,7 @@
 
 A Laravel application for authenticated bulk imports of consent data from large CSV files. The intended design stores the original upload, intermediate chunks, and generated artifacts in private MinIO storage, while RabbitMQ coordinates asynchronous processing.
 
-> This README is the design reference. Built so far: the upload step, the outbox and its relay, the message envelope and typed messages, and the RabbitMQ topology. Not built yet: inbox deduplication, the parse, validate and assemble workers, and results and downloads on the dashboard.
+> This README is the design reference. Built so far: the upload step, the outbox and its relay, the message envelope and typed messages, and the RabbitMQ topology. Not built yet: the validate and assemble workers, and results and downloads on the dashboard.
 
 ## Project shape
 
@@ -17,7 +17,6 @@ A possible code layout as the feature is implemented:
 - app/Domains/BulkImport/Services/Csv
 - app/Filament/Resources/BulkImports
 - app/Infrastructure/Messaging/Outbox
-- app/Infrastructure/Messaging/Inbox
 
 RabbitMQ messages should carry import IDs, chunk IDs, and object-storage references, never the CSV contents.
 
@@ -62,7 +61,7 @@ Persist import-level metadata, not each CSV row. A BulkImport record can hold it
 
 A BulkImportChunk record can hold the import ID, sequence number, source row range, chunk object key, result/error object keys, status, attempt or lease data, and row counts.
 
-The outbox stores a stable message ID, type/version, routing key, payload, and publish/retry metadata. The inbox uses a unique consumer-name/message-ID pair to deduplicate redelivered messages and track handling. Neither table provides exactly-once processing by itself: the design is at-least-once delivery with idempotent handlers.
+The outbox stores a stable message ID, type/version, routing key, payload, and publish/retry metadata. The outbox does not provide exactly-once processing by itself: the design is at-least-once delivery with idempotent handlers.
 
 ## RabbitMQ topology
 
@@ -76,7 +75,7 @@ For the demo, use durable queues with one message per unit of work:
 
 A direct command exchange such as bulk.commands can route messages with keys such as import.parse, chunk.validate, and import.assemble. Add durable retry/dead-letter handling, and scale validation consumers independently when useful.
 
-The outbox makes database state changes and message intent atomic. The relay publishes and waits for publisher confirms. Consumers claim an inbox entry and make their database updates idempotently. Use deterministic MinIO keys and verify checksums so a retry can safely find or replace the intended artifact. Use conditional state transitions and recover expired worker leases.
+The outbox makes database state changes and message intent atomic. The relay publishes and waits for publisher confirms. Consumers make their database updates idempotently. Use deterministic MinIO keys and verify checksums so a retry can safely find or replace the intended artifact. Use conditional state transitions and recover expired worker leases.
 
 If processing later calls an external consent API, pass a stable idempotency key such as import ID plus source-row number when that API supports it. Whether the demo calls that service is still an open product decision.
 
