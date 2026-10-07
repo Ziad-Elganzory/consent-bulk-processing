@@ -5,20 +5,20 @@ namespace App\Infrastructure\Messaging\Topology;
 use App\Infrastructure\Messaging\Contracts\MessageHandler;
 
 /**
- * A queue a module consumes, bound to an exchange under one or more routing keys
- * (message types). Declaring it creates three durable quorum queues:
+ * One queue a domain consumes. Besides the queue itself, two companions are declared:
  *
- *   {name}         the work queue; rejected messages dead-letter to {name}.dead
- *   {name}.retry   no consumers; a failed message waits retryDelaySeconds, then returns to {name}
- *   {name}.dead    messages that used up maxAttempts, kept for inspection
+ *  - "{name}.retry" holds a failed message for retryDelaySeconds, then hands it back;
+ *  - "{name}.dead" keeps messages that failed every attempt or could not be read.
+ *
+ * Both are reached through the default exchange, so no other queue ever sees those copies.
  */
 final readonly class QueueDefinition
 {
     /**
-     * @param  list<string>  $routingKeys
-     * @param  int  $maxAttempts  deliveries before a message goes to the dead queue
-     * @param  int  $prefetch  unacknowledged messages one consumer may hold
-     * @param  class-string<MessageHandler>|null  $handler  null while the queue has no consumer yet
+     * @param  list<string>  $routingKeys  message types this queue receives
+     * @param  int  $maxAttempts  deliveries before a failing message goes to the dead queue
+     * @param  int  $prefetch  messages one consumer may hold unacknowledged
+     * @param  class-string<MessageHandler>|null  $handler  null until the queue has a consumer
      */
     public function __construct(
         public string $name,
@@ -30,52 +30,44 @@ final readonly class QueueDefinition
         public ?string $handler = null,
     ) {}
 
-    public function retryQueueName(): string
+    public function retryQueue(): string
     {
-        return "{$this->name}.retry";
+        return $this->name.'.retry';
     }
 
-    public function deadQueueName(): string
+    public function deadQueue(): string
     {
-        return "{$this->name}.dead";
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function workQueueArguments(): array
-    {
-        return [
-            'x-queue-type' => 'quorum',
-            'x-dead-letter-exchange' => '',
-            'x-dead-letter-routing-key' => $this->deadQueueName(),
-        ];
+        return $this->name.'.dead';
     }
 
     /**
-     * When a message's TTL expires the broker moves it back to the work queue.
-     * At-least-once dead-lettering keeps a waiting retry from being lost if the broker
-     * restarts mid-move, and requires reject-publish overflow.
+     * Every queue to declare for this definition, keyed by name, work queue first.
      *
-     * @return array<string, mixed>
+     * @return array<string, array<string, mixed>>
      */
-    public function retryQueueArguments(): array
+    public function declarations(): array
     {
         return [
-            'x-queue-type' => 'quorum',
-            'x-message-ttl' => $this->retryDelaySeconds * 1000,
-            'x-dead-letter-exchange' => '',
-            'x-dead-letter-routing-key' => $this->name,
-            'x-dead-letter-strategy' => 'at-least-once',
-            'x-overflow' => 'reject-publish',
+            // A message the consumer rejects is moved to the dead queue.
+            $this->name => [
+                'x-queue-type' => 'quorum',
+                'x-dead-letter-exchange' => '',
+                'x-dead-letter-routing-key' => $this->deadQueue(),
+            ],
+            // Nothing consumes this queue: a message waits out its TTL, then RabbitMQ moves it
+            // back to the work queue. At-least-once dead-lettering keeps that move from losing
+            // a message if the broker restarts, and requires reject-publish overflow.
+            $this->retryQueue() => [
+                'x-queue-type' => 'quorum',
+                'x-message-ttl' => $this->retryDelaySeconds * 1000,
+                'x-dead-letter-exchange' => '',
+                'x-dead-letter-routing-key' => $this->name,
+                'x-dead-letter-strategy' => 'at-least-once',
+                'x-overflow' => 'reject-publish',
+            ],
+            $this->deadQueue() => [
+                'x-queue-type' => 'quorum',
+            ],
         ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function deadQueueArguments(): array
-    {
-        return ['x-queue-type' => 'quorum'];
     }
 }

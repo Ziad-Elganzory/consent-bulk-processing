@@ -7,9 +7,10 @@ use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
 use App\Infrastructure\Messaging\Topology\QueueDefinition;
 
 /**
- * A domain's declaration of what it publishes and consumes.
+ * Implemented once per domain to tell the SDK what that domain sends and receives.
+ * The registry reads every implementation at startup.
  */
-interface ModuleMessaging
+interface DeclaresMessaging
 {
     /**
      * @return list<ExchangeDefinition>

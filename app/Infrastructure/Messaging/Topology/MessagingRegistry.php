@@ -2,8 +2,8 @@
 
 namespace App\Infrastructure\Messaging\Topology;
 
+use App\Infrastructure\Messaging\Contracts\DeclaresMessaging;
 use App\Infrastructure\Messaging\Contracts\MessageHandler;
-use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
 use App\Infrastructure\Messaging\Protocol\MessageContract;
 use InvalidArgumentException;
 use LogicException;
@@ -27,7 +27,7 @@ final class MessagingRegistry
     private array $messages = [];
 
     /**
-     * @param  list<ModuleMessaging>  $modules
+     * @param  list<DeclaresMessaging>  $modules
      *
      * @throws LogicException when the declarations contradict each other
      */
@@ -123,7 +123,7 @@ final class MessagingRegistry
     public function message(string $type, array $data): MessageContract
     {
         $messageClass = $this->messages[$type]
-            ?? throw new InvalidArgumentException("Unsupported message type [{$type}].");
+            ?? throw new InvalidArgumentException("Unknown message type [{$type}].");
 
         return $messageClass::fromData($data);
     }

@@ -5,8 +5,8 @@ namespace App\Domains\BulkImport\Messaging;
 use App\Domains\BulkImport\Handlers\ParseImportHandler;
 use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Messages\ValidateChunk;
+use App\Infrastructure\Messaging\Contracts\DeclaresMessaging;
 use App\Infrastructure\Messaging\Contracts\MessageHandler;
-use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
 use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
 use App\Infrastructure\Messaging\Topology\QueueDefinition;
 
@@ -14,7 +14,7 @@ use App\Infrastructure\Messaging\Topology\QueueDefinition;
  * What the bulk import pipeline publishes and consumes. Names and consumer settings
  * come from config('bulk-imports.messaging').
  */
-final class BulkImportMessaging implements ModuleMessaging
+final class BulkImportMessaging implements DeclaresMessaging
 {
     public function exchanges(): array
     {

@@ -3,24 +3,28 @@
 namespace App\Infrastructure\Messaging\Protocol;
 
 /**
- * A typed message carried inside a MessageEnvelope.
+ * A message class: plain, immutable, holding IDs and object keys only.
  *
- * The type is also the routing key the message is published with, so it must
- * be bound to a queue in a ModuleMessaging declaration.
+ * Its type doubles as the routing key it is published with, so every type must be
+ * bound to a queue by some DeclaresMessaging implementation.
  */
 interface MessageContract
 {
     public static function type(): string;
 
     /**
+     * The fields to send.
+     *
      * @return array<string, mixed>
      */
     public function data(): array;
 
     /**
+     * Builds the message back from received fields.
+     *
      * @param  array<string, mixed>  $data
      *
-     * @throws \InvalidArgumentException when the data is not valid for this message
+     * @throws \InvalidArgumentException when a field is missing or invalid
      */
     public static function fromData(array $data): static;
 }

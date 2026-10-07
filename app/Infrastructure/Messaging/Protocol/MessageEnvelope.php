@@ -10,9 +10,10 @@ use JsonException;
 use Throwable;
 
 /**
- * The common structure of every message published to RabbitMQ.
+ * What actually travels through RabbitMQ: a typed message plus the identity needed to
+ * trace and deduplicate it. The body is this object as JSON:
  *
- * Messages carry IDs and object-storage references only, never CSV contents.
+ *   {"message_id", "type", "correlation_id", "occurred_at", "data": {...}}
  */
 final readonly class MessageEnvelope
 {
@@ -22,10 +23,13 @@ final readonly class MessageEnvelope
         public CarbonImmutable $occurredAt,
         public MessageContract $message,
     ) {
-        MessageData::assertNonEmptyString($this->messageId, 'message_id');
-        MessageData::assertNonEmptyString($this->correlationId, 'correlation_id');
+        MessageFields::nonEmpty($this->messageId, 'message_id');
+        MessageFields::nonEmpty($this->correlationId, 'correlation_id');
     }
 
+    /**
+     * Wraps a new message, giving it a fresh id unless one is passed in.
+     */
     public static function make(MessageContract $message, string $correlationId, ?string $messageId = null): self
     {
         return new self(
@@ -67,18 +71,20 @@ final readonly class MessageEnvelope
     }
 
     /**
-     * @throws JsonException
-     * @throws InvalidArgumentException when the JSON is not a valid envelope
+     * Reads a received body. The registry supplies the message class for its type.
+     *
+     * @throws JsonException when the body is not JSON
+     * @throws InvalidArgumentException when it is JSON but not a valid envelope
      */
     public static function fromJson(string $json, MessagingRegistry $registry): self
     {
-        $payload = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
 
-        if (! is_array($payload) || array_is_list($payload)) {
-            throw new InvalidArgumentException('The message envelope must be a JSON object.');
+        if (! is_array($decoded) || array_is_list($decoded)) {
+            throw new InvalidArgumentException('The message body is not a JSON object.');
         }
 
-        return self::fromArray($payload, $registry);
+        return self::fromArray($decoded, $registry);
     }
 
     /**
@@ -88,25 +94,24 @@ final readonly class MessageEnvelope
      */
     public static function fromArray(array $payload, MessagingRegistry $registry): self
     {
-        $data = $payload['data'] ?? null;
-
-        if (! is_array($data)) {
-            throw new InvalidArgumentException('The [data] field must be an array.');
+        if (! is_array($payload['data'] ?? null)) {
+            throw new InvalidArgumentException('Field [data] must be an object.');
         }
 
-        $occurredAt = MessageData::requiredString($payload, 'occurred_at');
+        $fields = new MessageFields($payload);
+        $occurredAt = $fields->text('occurred_at');
 
         try {
             $occurredAt = CarbonImmutable::parse($occurredAt);
         } catch (Throwable) {
-            throw new InvalidArgumentException('The [occurred_at] field must be a valid date.');
+            throw new InvalidArgumentException('Field [occurred_at] is not a valid date.');
         }
 
         return new self(
-            messageId: MessageData::requiredString($payload, 'message_id'),
-            correlationId: MessageData::requiredString($payload, 'correlation_id'),
+            messageId: $fields->text('message_id'),
+            correlationId: $fields->text('correlation_id'),
             occurredAt: $occurredAt,
-            message: $registry->message(MessageData::requiredString($payload, 'type'), $data),
+            message: $registry->message($fields->text('type'), $payload['data']),
         );
     }
 }

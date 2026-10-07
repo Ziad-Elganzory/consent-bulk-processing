@@ -49,7 +49,7 @@ it('refuses to publish a message of an unknown type', function (): void {
     ])->save();
 
     app(AmqpOutboxPublisher::class)->publish($message);
-})->throws(InvalidArgumentException::class, 'Unsupported message type');
+})->throws(InvalidArgumentException::class, 'Unknown message type');
 
 it('refuses to publish when the routing key does not match the envelope type', function (): void {
     $message = validOutboxMessage();

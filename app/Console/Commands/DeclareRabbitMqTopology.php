@@ -23,13 +23,7 @@ class DeclareRabbitMqTopology extends Command
             }
 
             foreach ($registry->queues() as $queue) {
-                $declarations = [
-                    $queue->name => $queue->workQueueArguments(),
-                    $queue->retryQueueName() => $queue->retryQueueArguments(),
-                    $queue->deadQueueName() => $queue->deadQueueArguments(),
-                ];
-
-                foreach ($declarations as $name => $arguments) {
+                foreach ($queue->declarations() as $name => $arguments) {
                     $channel->queue_declare($name, durable: true, auto_delete: false, arguments: new AMQPTable($arguments));
                 }
 

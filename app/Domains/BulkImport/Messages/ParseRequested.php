@@ -3,7 +3,7 @@
 namespace App\Domains\BulkImport\Messages;
 
 use App\Infrastructure\Messaging\Protocol\MessageContract;
-use App\Infrastructure\Messaging\Protocol\MessageData;
+use App\Infrastructure\Messaging\Protocol\MessageFields;
 
 final readonly class ParseRequested implements MessageContract
 {
@@ -11,8 +11,8 @@ final readonly class ParseRequested implements MessageContract
         public string $bulkImportId,
         public string $sourceObjectKey,
     ) {
-        MessageData::assertNonEmptyString($this->bulkImportId, 'bulk_import_id');
-        MessageData::assertNonEmptyString($this->sourceObjectKey, 'source_object_key');
+        MessageFields::nonEmpty($this->bulkImportId, 'bulk_import_id');
+        MessageFields::nonEmpty($this->sourceObjectKey, 'source_object_key');
     }
 
     public static function type(): string
@@ -36,9 +36,11 @@ final readonly class ParseRequested implements MessageContract
      */
     public static function fromData(array $data): static
     {
+        $fields = new MessageFields($data);
+
         return new self(
-            bulkImportId: MessageData::requiredString($data, 'bulk_import_id'),
-            sourceObjectKey: MessageData::requiredString($data, 'source_object_key'),
+            bulkImportId: $fields->text('bulk_import_id'),
+            sourceObjectKey: $fields->text('source_object_key'),
         );
     }
 }

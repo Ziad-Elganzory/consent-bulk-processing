@@ -2,7 +2,7 @@
 
 use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Messaging\BulkImportMessaging;
-use App\Infrastructure\Messaging\Contracts\ModuleMessaging;
+use App\Infrastructure\Messaging\Contracts\DeclaresMessaging;
 use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
 use App\Infrastructure\Messaging\Topology\MessagingRegistry;
 use App\Infrastructure\Messaging\Topology\QueueDefinition;
@@ -12,9 +12,9 @@ function queueDefinition(string $name, string $exchange, array $routingKeys, ?st
     return new QueueDefinition($name, $exchange, $routingKeys, $maxAttempts, retryDelaySeconds: 30, prefetch: 1, handler: $handler);
 }
 
-function moduleMessaging(array $exchanges, array $queues, array $messages = []): ModuleMessaging
+function declaration(array $exchanges, array $queues, array $messages = []): DeclaresMessaging
 {
-    return new class($exchanges, $queues, $messages) implements ModuleMessaging
+    return new class($exchanges, $queues, $messages) implements DeclaresMessaging
     {
         public function __construct(private array $exchanges, private array $queues, private array $messages) {}
 
@@ -53,33 +53,33 @@ it('rebuilds a registered message from its type and data', function (): void {
 
 it('rejects an unknown message type', function (): void {
     app(MessagingRegistry::class)->message('consent.unknown', []);
-})->throws(InvalidArgumentException::class, 'Unsupported message type');
+})->throws(InvalidArgumentException::class, 'Unknown message type');
 
-it('rejects contradicting declarations', function (ModuleMessaging $module, string $error): void {
+it('rejects contradicting declarations', function (DeclaresMessaging $module, string $error): void {
     expect(fn () => new MessagingRegistry([$module]))->toThrow(LogicException::class, $error);
 })->with([
     'queue on an undeclared exchange' => fn () => [
-        moduleMessaging([], [queueDefinition('q', 'missing', ['k'])]),
+        declaration([], [queueDefinition('q', 'missing', ['k'])]),
         'undeclared exchange',
     ],
     'routing key bound to two queues' => fn () => [
-        moduleMessaging([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k']), queueDefinition('b', 'x', ['k'])]),
+        declaration([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k']), queueDefinition('b', 'x', ['k'])]),
         'more than one queue',
     ],
     'queue declared twice' => fn () => [
-        moduleMessaging([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k']), queueDefinition('a', 'x', ['j'])]),
+        declaration([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k']), queueDefinition('a', 'x', ['j'])]),
         'declared twice',
     ],
     'message without a binding' => fn () => [
-        moduleMessaging([new ExchangeDefinition('x')], [], [ParseRequested::class]),
+        declaration([new ExchangeDefinition('x')], [], [ParseRequested::class]),
         'not bound',
     ],
     'handler that is not a MessageHandler' => fn () => [
-        moduleMessaging([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k'], handler: stdClass::class)]),
+        declaration([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k'], handler: stdClass::class)]),
         'does not implement MessageHandler',
     ],
     'attempts below one' => fn () => [
-        moduleMessaging([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k'], maxAttempts: 0)]),
+        declaration([new ExchangeDefinition('x')], [queueDefinition('a', 'x', ['k'], maxAttempts: 0)]),
         'at least 1',
     ],
 ]);
@@ -102,13 +102,12 @@ it('takes consumer settings from config', function (): void {
     expect([$queue->maxAttempts, $queue->retryDelaySeconds, $queue->prefetch])->toBe([5, 12, 2]);
 });
 
-it('derives the retry and dead queues from the work queue', function (): void {
-    $queue = queueDefinition('jobs', 'x', ['k']);
+it('declares a retry queue and a dead queue next to each work queue', function (): void {
+    $declarations = queueDefinition('jobs', 'x', ['k'])->declarations();
 
-    expect($queue->retryQueueName())->toBe('jobs.retry')
-        ->and($queue->deadQueueName())->toBe('jobs.dead')
-        ->and($queue->workQueueArguments())->toMatchArray(['x-dead-letter-exchange' => '', 'x-dead-letter-routing-key' => 'jobs.dead'])
-        ->and($queue->retryQueueArguments())->toMatchArray([
+    expect(array_keys($declarations))->toBe(['jobs', 'jobs.retry', 'jobs.dead'])
+        ->and($declarations['jobs'])->toMatchArray(['x-dead-letter-exchange' => '', 'x-dead-letter-routing-key' => 'jobs.dead'])
+        ->and($declarations['jobs.retry'])->toMatchArray([
             'x-message-ttl' => 30_000,
             'x-dead-letter-exchange' => '',
             'x-dead-letter-routing-key' => 'jobs',

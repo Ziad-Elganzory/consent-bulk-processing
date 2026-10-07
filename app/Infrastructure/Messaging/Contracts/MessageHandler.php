@@ -6,21 +6,21 @@ use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Throwable;
 
 /**
- * Handles the messages of one queue (QueueDefinition::$handler). Resolved from the
- * container for every delivery.
+ * The domain code that runs for each message of one queue. A fresh instance is created
+ * through the container for every message.
  *
- * Delivery is at least once, so handle() must be idempotent. MessageEnvelope::$messageId
- * identifies a message across deliveries.
+ * The same message can arrive more than once, so handle() must leave the same result
+ * when it runs again for a message id it has already seen.
  */
 interface MessageHandler
 {
     /**
-     * Throwing sends the message to the retry queue, or to the dead queue once its attempts are used up.
+     * Return to mark the message done. Throw to have it tried again later.
      */
     public function handle(MessageEnvelope $envelope): void;
 
     /**
-     * Called once, after the last attempt failed and the message was moved to the dead queue.
+     * Runs once, after the message failed on its final attempt.
      */
     public function failed(MessageEnvelope $envelope, Throwable $exception): void;
 }

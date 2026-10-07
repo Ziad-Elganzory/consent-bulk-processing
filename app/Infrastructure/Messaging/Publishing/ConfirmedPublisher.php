@@ -10,41 +10,54 @@ use PhpAmqpLib\Message\AMQPMessage;
 use RuntimeException;
 
 /**
- * Publishes one message at a time on its own channel in confirm mode, and returns
- * only once the broker has stored it.
+ * Sends one message at a time and returns only once RabbitMQ has stored it. Messages are
+ * published as mandatory, so one that no queue would receive comes back instead of being
+ * dropped.
  */
 class ConfirmedPublisher
 {
-    private const CONNECTION_TIMEOUT_SECONDS = 3;
+    private const int CONNECTION_TIMEOUT_SECONDS = 3;
 
-    /** The channel already put into confirm mode, to spot when the connection hands out a new one. */
+    /** Our confirm-mode channel, so a new one handed out after a reconnect is set up again. */
     private ?AMQPChannel $channel = null;
+
+    /** Set by the nack listener: the broker refused to store the message. */
+    private bool $refused = false;
+
+    /** Set by the return listener: no queue matched the routing key. */
+    private bool $unroutable = false;
 
     public function __construct(private readonly RabbitMQConnection $connection) {}
 
     /**
-     * Publishes as mandatory, so an unroutable message fails instead of being dropped.
-     *
-     * @throws TransientPublishFailure when the broker is unreachable, times out, or nacks
-     * @throws RuntimeException when the broker returns the message as unroutable
+     * @throws TransientPublishFailure when RabbitMQ is unreachable, too slow, or refuses the message
+     * @throws RuntimeException when no queue matches the routing key
      */
     public function publish(AMQPMessage $message, string $exchange, string $routingKey): void
     {
+        $this->refused = false;
+        $this->unroutable = false;
+
         try {
             $channel = $this->channel();
-            $channel->basic_publish($message, $exchange, $routingKey, true);
+            $channel->basic_publish($message, $exchange, $routingKey, mandatory: true);
 
-            // The nack and return handlers throw from inside this wait.
+            // Blocks until RabbitMQ acks, nacks or returns the message, or the timeout passes.
             $channel->wait_for_pending_acks_returns(config('bulk-imports.outbox.publish_timeout_seconds'));
         } catch (AMQPExceptionInterface $exception) {
-            // The channel state is unknown after a broker error, so start fresh next time.
-            $this->disconnect();
+            $this->reset();
 
             throw new TransientPublishFailure("RabbitMQ unavailable: {$exception->getMessage()}", previous: $exception);
-        } catch (TransientPublishFailure $exception) {
-            $this->disconnect();
+        }
 
-            throw $exception;
+        if ($this->unroutable) {
+            throw new RuntimeException("No queue receives routing key [{$routingKey}] on exchange [{$exchange}].");
+        }
+
+        if ($this->refused) {
+            $this->reset();
+
+            throw new TransientPublishFailure("RabbitMQ refused to store the message for [{$routingKey}].");
         }
     }
 
@@ -52,7 +65,8 @@ class ConfirmedPublisher
     {
         $ioTimeout = config('bulk-imports.outbox.publish_timeout_seconds') + 2;
 
-        // Short timeouts so a slow broker fails fast. Heartbeat is off because it would need longer ones.
+        // Short timeouts so a slow broker fails fast. Heartbeat stays off, because it would
+        // need timeouts of at least twice its interval.
         $channel = $this->connection->channel([
             'connection_timeout' => self::CONNECTION_TIMEOUT_SECONDS,
             'read_timeout' => $ioTimeout,
@@ -60,26 +74,25 @@ class ConfirmedPublisher
             'heartbeat' => 0,
         ]);
 
-        if ($channel === $this->channel) {
-            return $channel;
+        if ($channel !== $this->channel) {
+            $channel->confirm_select();
+            $channel->set_nack_handler(function (): void {
+                $this->refused = true;
+            });
+            $channel->set_return_listener(function (): void {
+                $this->unroutable = true;
+            });
+
+            $this->channel = $channel;
         }
 
-        $channel->confirm_select();
-
-        $channel->set_nack_handler(static function (): void {
-            throw new TransientPublishFailure('RabbitMQ negatively acknowledged a message.');
-        });
-
-        $channel->set_return_listener(
-            static function (int $replyCode, string $replyText, string $exchange, string $routingKey): void {
-                throw new RuntimeException("RabbitMQ returned an unroutable message for [{$exchange}:{$routingKey}].");
-            },
-        );
-
-        return $this->channel = $channel;
+        return $channel;
     }
 
-    private function disconnect(): void
+    /**
+     * Drops the connection so the next publish starts on a clean one.
+     */
+    private function reset(): void
     {
         $this->connection->close();
         $this->channel = null;
@@ -87,6 +100,6 @@ class ConfirmedPublisher
 
     public function __destruct()
     {
-        $this->disconnect();
+        $this->reset();
     }
 }

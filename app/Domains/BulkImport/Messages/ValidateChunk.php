@@ -3,7 +3,7 @@
 namespace App\Domains\BulkImport\Messages;
 
 use App\Infrastructure\Messaging\Protocol\MessageContract;
-use App\Infrastructure\Messaging\Protocol\MessageData;
+use App\Infrastructure\Messaging\Protocol\MessageFields;
 
 final readonly class ValidateChunk implements MessageContract
 {
@@ -12,9 +12,9 @@ final readonly class ValidateChunk implements MessageContract
         public string $chunkId,
         public string $chunkObjectKey,
     ) {
-        MessageData::assertNonEmptyString($this->bulkImportId, 'bulk_import_id');
-        MessageData::assertNonEmptyString($this->chunkId, 'chunk_id');
-        MessageData::assertNonEmptyString($this->chunkObjectKey, 'chunk_object_key');
+        MessageFields::nonEmpty($this->bulkImportId, 'bulk_import_id');
+        MessageFields::nonEmpty($this->chunkId, 'chunk_id');
+        MessageFields::nonEmpty($this->chunkObjectKey, 'chunk_object_key');
     }
 
     public static function type(): string
@@ -39,10 +39,12 @@ final readonly class ValidateChunk implements MessageContract
      */
     public static function fromData(array $data): static
     {
+        $fields = new MessageFields($data);
+
         return new self(
-            bulkImportId: MessageData::requiredString($data, 'bulk_import_id'),
-            chunkId: MessageData::requiredString($data, 'chunk_id'),
-            chunkObjectKey: MessageData::requiredString($data, 'chunk_object_key'),
+            bulkImportId: $fields->text('bulk_import_id'),
+            chunkId: $fields->text('chunk_id'),
+            chunkObjectKey: $fields->text('chunk_object_key'),
         );
     }
 }

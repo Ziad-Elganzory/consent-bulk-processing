@@ -19,7 +19,7 @@ This document is the reference the SDK is built against. Each section is marked 
 
 **The boundary rule**
 
-`App\Infrastructure` never imports from `App\Domains`. The SDK knows nothing about bulk imports. A domain plugs into it by implementing `ModuleMessaging` (section 6). This keeps the SDK extractable into a package or module later, and an architecture test enforces it (section 14).
+`App\Infrastructure` never imports from `App\Domains`. The SDK knows nothing about bulk imports. A domain plugs into it by implementing `DeclaresMessaging` (section 6). This keeps the SDK extractable into a package or module later, and an architecture test enforces it (section 14).
 
 ## 2. Principles
 
@@ -59,7 +59,7 @@ Exchange, queue, and routing key names are never literals in code. Each domain r
 app/Infrastructure/Messaging/
   README.md                         this document
   Contracts/                        interfaces a domain or the SDK implements
-    ModuleMessaging.php             a domain's declaration                           Built
+    DeclaresMessaging.php             a domain's declaration                           Built
     MessageHandler.php              handles one delivered message                    Built
   Connection/
     RabbitMQConnection.php          the only class that touches the package          Built
@@ -70,7 +70,7 @@ app/Infrastructure/Messaging/
   Protocol/                         what travels on the wire                         Built
     MessageContract.php             a typed message
     MessageEnvelope.php
-    MessageData.php
+    MessageFields.php               typed, named access to a message's fields
   Publishing/                       confirmed publishing, shared by outbox and consumer  Built
     ConfirmedPublisher.php
     Exceptions/TransientPublishFailure.php
@@ -82,8 +82,10 @@ app/Infrastructure/Messaging/
   Inbox/                            deduplication                                    Built
     Models/InboxMessage.php         InboxMessage::claim()
   Consuming/                        delivery handling                                Built
-    DeliveryProcessor.php
-    DeliveryOutcome.php
+    QueueConsumer.php               the consume loop: prefetch, heartbeat, stop conditions
+    ConsumerLimits.php              when a long-running consumer should stop
+    DeliverySettler.php             acknowledges, retries, dead-letters or rejects one delivery
+    Settlement.php                  the four ways a delivery can be settled
 
 app/Console/Commands/               entry points
   RelayOutbox.php                   outbox:relay                                     Built
@@ -92,7 +94,7 @@ app/Console/Commands/               entry points
   ConsumeQueue.php                  rabbitmq:consume {queue}                         Built
 
 app/Domains/BulkImport/             what a domain provides
-  Messaging/BulkImportMessaging.php its ModuleMessaging declaration                  Built
+  Messaging/BulkImportMessaging.php its DeclaresMessaging declaration                  Built
   Messages/                         ParseRequested, ValidateChunk (Built), AssembleImport (Planned)
   Handlers/                         ParseImportHandler (Built), validate and assemble (Planned)
   Services/Csv/CsvChunker.php       file checks and chunk writing for the parse step Built
@@ -105,7 +107,7 @@ Rules for adding code: group by role, create a folder only when a file needs it,
 
 | Concept | Meaning |
 | --- | --- |
-| **Message** | An immutable class implementing `MessageContract`. It has a static `type()` (the routing key), `data()`, and `fromData()`. It validates itself with `MessageData`. |
+| **Message** | An immutable class implementing `MessageContract`. It has a static `type()` (the routing key), `data()`, and `fromData()`. It validates itself with `MessageFields`. |
 | **Envelope** | The wrapper around every message: id, correlation id, time, and the message. It is the only thing serialized to RabbitMQ. |
 | **Exchange** | Where messages are published. One durable `direct` exchange carries all commands. |
 | **Queue** | A durable quorum queue a handler consumes. Each declared queue also gets a retry and a dead queue. |
@@ -123,7 +125,7 @@ A domain implements one class. Everything here is **Built** except the validate 
 ```php
 namespace App\Domains\BulkImport\Messaging;
 
-final class BulkImportMessaging implements ModuleMessaging
+final class BulkImportMessaging implements DeclaresMessaging
 {
     public function exchanges(): array
     {
@@ -231,8 +233,8 @@ The body never changes between deliveries. Attempt data travels as AMQP headers 
 
 | Header | Meaning |
 | --- | --- |
-| `x-attempt` | Delivery number, 1 on the first delivery |
-| `x-last-error` | The error of the previous attempt, truncated |
+| `x-delivery-attempt` | Which delivery of the message this is, 1 on the first |
+| `x-failure-reason` | Why the previous attempt failed, truncated |
 
 ## 8. Topology
 
@@ -342,6 +344,7 @@ Message-level failures do not stop the batch, so one bad row cannot block the ot
 
 - Opens a channel through `RabbitMQConnection`, applies `basic_qos(0, prefetch)`, and calls `basic_consume`.
 - Waits in a loop with a short timeout so it can check stop conditions.
+- Is a thin wrapper around `QueueConsumer`, which runs the loop, and `ConsumerLimits`, which decides when to stop.
 - Stops after the message in progress on SIGTERM, SIGINT, or SIGQUIT, and optionally on `--max-messages`, `--max-time`, or a memory limit, so a process manager can restart it fresh.
 - When heartbeat is enabled, registers `PCNTLHeartbeatSender` so heartbeats keep flowing while a handler is busy.
 - Refuses to start for an undeclared queue or a queue without a handler.
@@ -349,16 +352,16 @@ Message-level failures do not stop the batch, so one bad row cannot block the ot
 
 ### Settling a delivery (Built)
 
-`DeliveryProcessor` handles one delivery and always settles it with the broker.
+`DeliverySettler::settle()` decides what happens to one delivery and returns a `Settlement`.
 
-| Situation | Action |
-| --- | --- |
-| Body is not a valid envelope | Reject without requeue. The broker dead-letters it to `{name}.dead`. |
-| Handler succeeds | Acknowledge. |
-| Handler throws, attempts left | Publish a copy to `{name}.retry` with `x-attempt + 1`, wait for the broker's confirm, then acknowledge the original. |
-| Handler throws on the last attempt | Publish a copy to `{name}.dead` with the error, call the handler's `failed()` hook, then acknowledge. |
+| Situation | Action | Settlement |
+| --- | --- | --- |
+| Body is not a valid envelope | Reject without requeue. The work queue's dead-letter setting moves it to `{name}.dead`. | `Unreadable` |
+| Handler returns | Acknowledge. | `Acknowledged` |
+| Handler throws, attempts left | Store a copy in `{name}.retry` with `x-delivery-attempt` raised by one and the reason in `x-failure-reason`, then acknowledge the original. | `RetryScheduled` |
+| Handler throws on the final attempt | Store a copy in `{name}.dead`, run the handler's `failed()`, then acknowledge. | `MovedToDeadQueue` |
 
-The copy is confirmed before the acknowledge. A crash in between causes a duplicate, which handlers tolerate, and never a lost message. If the broker cannot take the copy, the exception propagates and the unacknowledged delivery is redelivered.
+The copy is always confirmed by RabbitMQ before the original is acknowledged, so a crash between the two can only produce a duplicate. If the copy cannot be stored, the exception escapes, the original stays unacknowledged, and RabbitMQ delivers it again.
 
 ### Handler contract
 
@@ -450,20 +453,20 @@ Long-running processes run as Compose services (`relay` today, one per worker la
 | Outbox relay | Feature tests with a fake `OutboxPublisher`: claiming, leases, batch size, backoff, parking, temporary versus message-level failures |
 | Publisher | Feature tests for everything that fails before a connection opens, plus an unreachable broker mapped to a temporary failure |
 | Topology | Registry tests: the bulk import declaration builds, messages resolve, queues are looked up, consumer settings come from config, retry and dead queue settings are derived, and each contradicting declaration throws |
-| Delivery processing | Feature tests with a recording handler, a mocked channel, and a mocked `ConfirmedPublisher`: handled, retried, dead-lettered (including a failing hook), rejected, and no ack when the copy cannot be published |
+| Delivery settling | Feature tests with a recording handler, a mocked channel, and a mocked `ConfirmedPublisher`: acknowledged, retry scheduled, moved to the dead queue (including a failing `failed()`), unreadable, and no ack when the copy cannot be stored |
 | Inbox | First claim succeeds, a repeat is refused, a rolled-back claim leaves nothing |
 | Parse handler | Feature tests with faked storage: chunking by rows and bytes, quoted newlines, BOM, blank rows, wrong column counts passed through, every unprocessable file case, duplicate delivery, resuming a crashed attempt, a storage failure left retryable, and the `failed()` hook |
-| Consume command | Refuses undeclared queues and queues without a handler |
+| Consume command | Refuses undeclared queues and queues without a handler. `ConsumerLimits` has unit tests for each limit |
 | Boundary | A Pest architecture test: `App\Infrastructure` must not use `App\Domains` |
 | Real broker | A manual check, not CI: publish a probe, read it back, then clean up (see below) |
 
-**Real-broker check.** Declare the topology, enqueue a probe envelope, let the relay publish it, and confirm with `rabbitmqctl list_queues -p sail name messages`. Read the message back to check the body and properties, then purge the queue and delete the probe row. To check the unroutable path, publish to a temporary exchange that has no bindings. To check retries, run `DeliveryProcessor` on a probe with a handler that always throws: the copy lands in `{queue}.retry`, and after the retry delay it returns to the work queue with `x-attempt` 2 and the error in `x-last-error`. A non-envelope body is rejected and arrives in `{queue}.dead`.
+**Real-broker check.** Declare the topology, enqueue a probe envelope, let the relay publish it, and confirm with `rabbitmqctl list_queues -p sail name messages`. Read the message back to check the body and properties, then purge the queue and delete the probe row. To check the unroutable path, publish to a temporary exchange that has no bindings. To check retries, settle a probe with `DeliverySettler` using a handler that always throws: the copy lands in `{queue}.retry`, and after the retry delay it returns to the work queue with `x-delivery-attempt` 2 and the reason in `x-failure-reason`. A body that is not an envelope is rejected and arrives in `{queue}.dead`.
 
 ## 15. Adding a message end to end
 
-1. Create the class in the domain's `Messages/` implementing `MessageContract`. Give it a type, `data()`, `fromData()`, and validation through `MessageData`.
-2. Add it to the domain's `ModuleMessaging::messages()`.
-3. Bind its type to a queue in `ModuleMessaging::queues()`, with a handler.
+1. Create the class in the domain's `Messages/` implementing `MessageContract`. Give it a type, `data()`, `fromData()`, and validation through `MessageFields`.
+2. Add it to the domain's `DeclaresMessaging::messages()`.
+3. Bind its type to a queue in `DeclaresMessaging::queues()`, with a handler.
 4. Write the handler following the rules in section 10.
 5. Redeclare the topology (`rabbitmq:topology:declare`). If an existing queue's arguments changed, delete the queue first.
 6. Produce the message with `OutboxMessage::enqueue(...)` inside the transaction that justifies it.
@@ -475,12 +478,12 @@ Long-running processes run as Compose services (`relay` today, one per worker la
 | Phase | Work | Status |
 | --- | --- | --- |
 | 0 | Outbox, relay, envelope, typed messages, config-declared topology | Built |
-| 1 | `RabbitMQConnection`, definitions, `ModuleMessaging`, `MessagingRegistry` | Built |
+| 1 | `RabbitMQConnection`, definitions, `DeclaresMessaging`, `MessagingRegistry` | Built |
 | 2 | Declare today's topology in `BulkImportMessaging`, switch the declare command and publisher to the registry, remove `config/rabbitmq-topology.php`, compare the broker's topology before and after | Built |
 | 3 | Move messages to `Domains/BulkImport/Messages`, resolve types through the registry instead of the envelope's `match` | Built |
-| 4 | Retry and dead queues from `QueueDefinition`, queue recreation, `ConfirmedPublisher`, `DeliveryProcessor`, inbox | Built |
+| 4 | Retry and dead queues from `QueueDefinition`, queue recreation, `ConfirmedPublisher`, `DeliverySettler`, inbox | Built |
 | 5 | `rabbitmq:consume`, the parse handler, the `parse-worker` service | Built (validate and assemble handlers come with their steps) |
-| 6 | Consumer autoscaling as in engy-code (`rabbitmq:work` supervisor scaling by backlog), planned with the validation step | Planned |
+| 6 | Consumer autoscaling for the validation step, designed by us when that step is built | Planned |
 | 7 | Optional: extraction into a package | Not scheduled |
 
 Phase 5 was checked end to end: a 25,000-row upload became three chunks (10,000, 10,000, 5,000 rows, each with the header) and three validate messages; republishing the same parse message changed nothing; a file with a duplicate column failed once with a clear message and no retry. Phase 4 was checked on the real broker: 9 queues with the expected arguments, a retried probe returning after the delay with its attempt headers, and a rejected message dead-lettered. Phases 1 to 3 changed structure only. The broker's exchange, queues, and bindings were compared with `rabbitmqctl` before and after and were identical, and all tests stayed green. The boundary architecture test was added with phase 3.
@@ -500,12 +503,12 @@ Phase 5 was checked end to end: a 25,000-row upload became three chunks (10,000,
 | Consumer retry settings | Domain config with `.env` overrides, passed into each `QueueDefinition` | The SDK reads no domain config for topology |
 | Inbox consumer name | The handler's class name | Stable and unique per consumer, no extra config |
 | Inbox claim placement | Inside the transaction that commits the handler's result | A failed handler leaves no claim, so a retry is not mistaken for a duplicate |
-| Consumer heartbeat | As in engy-code: `RABBITMQ_HEARTBEAT` (60 s default), kept alive with `PCNTLHeartbeatSender` | Detects dead connections fast without dropping a busy handler |
+| Consumer heartbeat | `RABBITMQ_HEARTBEAT` (60 s default), kept alive during long handlers with php-amqplib's `PCNTLHeartbeatSender` | Detects dead connections fast without dropping a busy handler |
 | Unprocessable files | The handler marks the import failed and returns, so the message is acked once | Retrying a broken file only repeats the same failure |
 | Parse checks | File level only (exists, not empty, size, `.csv`, text, UTF-8, header names, a data row, record size). Row-level problems go to validation | A file is rejected only when nothing in it can be used |
 | Outbox ordering | Oldest first, but not strictly ordered across failures | Handlers must not depend on arrival order |
 | CSV rows | Never stored in the database | Memory and privacy. Rows live in object storage. |
-| Autoscaling | As in engy-code, added with the validation step. One consumer per queue until then. | Only validation benefits from more consumers |
+| Autoscaling | Designed with the validation step. One consumer per queue until then. | Only validation benefits from more consumers |
 
 ## 18. Open questions
 
@@ -515,6 +518,5 @@ Phase 5 was checked end to end: a 25,000-row upload became three chunks (10,000,
 
 ## 19. References
 
-- The `batch-processing-lab` and `engy-code` demos in the same projects folder. Their messaging code shaped the retry and dead-letter design, the generic consume command, and the heartbeat approach. This SDK keeps its own outbox, typed envelope, inbox, and boundary rules.
 - The package: `vladimir-yuldashev/laravel-queue-rabbitmq`, used only for connections.
 - `config/bulk-imports.php` for outbox and import limits, and `app/Domains/BulkImport/Messaging/BulkImportMessaging.php` for the topology.
