@@ -56,9 +56,8 @@ services:
             args:
                 WWWGROUP: '${WWWGROUP}'
         image: 'sail-8.5/app'
-        # Runs and auto-scales consumers for the queues named here. The assemble queue has no
-        # real handler yet, so it is left out.
-        command: 'php artisan rabbitmq:work --queue=${BULK_IMPORT_PARSE_QUEUE:-consent.parse} --queue=${BULK_IMPORT_VALIDATE_QUEUE:-consent.validate}'
+        # Runs and auto-scales consumers for the queues named here.
+        command: 'php artisan rabbitmq:work --queue=${BULK_IMPORT_PARSE_QUEUE:-consent.parse} --queue=${BULK_IMPORT_VALIDATE_QUEUE:-consent.validate} --queue=${BULK_IMPORT_ASSEMBLE_QUEUE:-consent.assemble}'
         restart: unless-stopped
         # Lets consumers finish the message in hand (up to 120 s) before the container is killed.
         stop_grace_period: 130s
