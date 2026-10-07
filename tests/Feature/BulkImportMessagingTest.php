@@ -40,3 +40,17 @@ it('binds the routing key of every message the domain publishes to a queue on it
 
     expect($bound)->toHaveCount(1);
 })->with([ParseRequested::class, ValidateChunk::class]);
+
+it('scales the validate queue between the consumer limits from config, and leaves the others at one consumer', function (): void {
+    config(['bulk-imports.messaging.scaling.validate' => ['min_consumers' => 2, 'max_consumers' => 7, 'scale_down_cooldown_seconds' => 90]]);
+
+    $registry = app(MessagingRegistry::class);
+    $queues = config('bulk-imports.messaging.queues');
+    $validate = collect($registry->queues())->firstWhere('name', $queues['validate']);
+    $parse = collect($registry->queues())->firstWhere('name', $queues['parse']);
+
+    expect($validate->scaling->minConsumers())->toBe(2)
+        ->and($validate->scaling->maxConsumers())->toBe(7)
+        ->and($validate->scaling->scaleDownCooldownSeconds())->toBe(90)
+        ->and($parse->scaling->maxConsumers())->toBe(1);
+});

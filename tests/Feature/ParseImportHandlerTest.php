@@ -54,13 +54,13 @@ function chunkContents(BulkImport $import, int $sequence): ?string
 
 it('splits the file into chunks that each start with the header, and queues one validation message per chunk', function (): void {
     config(['bulk-imports.chunk_max_rows' => 2]);
-    $import = importWithCsv("phone,email\n1,a\n2,b\n3,c\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n2,b\n3,c\n");
 
     parseImport($import);
 
     expect($import->refresh()->status)->toBe(BulkImportStatus::Validating)
-        ->and(chunkContents($import, 1))->toBe("phone,email\n1,a\n2,b\n")
-        ->and(chunkContents($import, 2))->toBe("phone,email\n3,c\n")
+        ->and(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n1,a\n2,b\n")
+        ->and(chunkContents($import, 2))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n3,c\n")
         ->and(chunkContents($import, 3))->toBeNull();
 
     $chunks = BulkImportChunk::query()->orderBy('sequence')->get();
@@ -76,42 +76,42 @@ it('splits the file into chunks that each start with the header, and queues one 
 });
 
 it('starts a new chunk when the byte limit is reached', function (): void {
-    config(['bulk-imports.chunk_max_bytes' => 20]);
-    $import = importWithCsv("phone,email\n1,a\n2,b\n3,c\n");
+    config(['bulk-imports.chunk_max_bytes' => 73]);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n2,b\n3,c\n");
 
     parseImport($import);
 
-    expect(chunkContents($import, 1))->toBe("phone,email\n1,a\n2,b\n")
-        ->and(chunkContents($import, 2))->toBe("phone,email\n3,c\n");
+    expect(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n1,a\n2,b\n")
+        ->and(chunkContents($import, 2))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n3,c\n");
 });
 
 it('keeps a quoted field with a newline in one row', function (): void {
-    $import = importWithCsv("name,note\nA,\"line1\nline2\"\nB,x\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\nA,\"line1\nline2\"\nB,x\n");
 
     parseImport($import);
 
-    expect(chunkContents($import, 1))->toBe("name,note\nA,\"line1\nline2\"\nB,x\n");
+    expect(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\nA,\"line1\nline2\"\nB,x\n");
 });
 
 it('strips a byte order mark and skips blank rows', function (): void {
-    $import = importWithCsv("\xEF\xBB\xBFphone,email\n\n1,a\n,\n2,b\n");
+    $import = importWithCsv("\xEF\xBB\xBFConsent code,Consent name,Description,Purpose,Version,Status\n\n1,a\n,\n2,b\n");
 
     parseImport($import);
 
-    expect(chunkContents($import, 1))->toBe("phone,email\n1,a\n2,b\n");
+    expect(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n1,a\n2,b\n");
 });
 
 it('passes rows with the wrong number of columns on to validation', function (): void {
-    $import = importWithCsv("a,b\n1\n1,2,3\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1\n1,2,3\n");
 
     parseImport($import);
 
     expect($import->refresh()->status)->toBe(BulkImportStatus::Validating)
-        ->and(chunkContents($import, 1))->toBe("a,b\n1\n1,2,3\n");
+        ->and(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n1\n1,2,3\n");
 });
 
 it('handles a duplicate delivery only once', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n");
     $envelope = parseEnvelope($import);
 
     parseImport($import, $envelope);
@@ -122,7 +122,7 @@ it('handles a duplicate delivery only once', function (): void {
 });
 
 it('creates nothing when another worker finished the import while this one was parsing', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n");
     $this->mock(CsvChunker::class, fn (MockInterface $mock) => $mock->shouldReceive('split')->andReturnUsing(function () use ($import): array {
         // The other worker wins the race to validating while this one is still splitting the file.
         $import->update(['status' => BulkImportStatus::Validating]);
@@ -138,18 +138,18 @@ it('creates nothing when another worker finished the import while this one was p
 });
 
 it('finishes an import that an earlier attempt left in parsing, overwriting its chunk files', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n", status: BulkImportStatus::Parsing);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n", status: BulkImportStatus::Parsing);
     Storage::disk(config('bulk-imports.disk'))->put(chunkKey($import, 1), 'left over from a crashed attempt');
 
     parseImport($import);
 
     expect($import->refresh()->status)->toBe(BulkImportStatus::Validating)
-        ->and(chunkContents($import, 1))->toBe("phone,email\n1,a\n")
+        ->and(chunkContents($import, 1))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\n1,a\n")
         ->and(BulkImportChunk::query()->count())->toBe(1);
 });
 
 it('skips an import that is already past parsing', function (BulkImportStatus $status): void {
-    $import = importWithCsv("phone,email\n1,a\n", status: $status);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n", status: $status);
 
     parseImport($import);
 
@@ -159,7 +159,7 @@ it('skips an import that is already past parsing', function (BulkImportStatus $s
 })->with([BulkImportStatus::Validating, BulkImportStatus::Completed, BulkImportStatus::Failed]);
 
 it('ignores a message for an import that no longer exists', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n");
     $envelope = parseEnvelope($import);
     $import->delete();
 
@@ -188,8 +188,9 @@ it('fails the import without retrying when the file is not processable', functio
     'binary content' => ["a,b\n\0\0\0", 'consents.csv', 'not a text file'],
     'not utf-8' => ["a,b\n\xC3\x28,x\nmore,rows\n", 'consents.csv', 'not UTF-8 text'],
     'no header row' => ["\n\n", 'consents.csv', 'no header row'],
-    'header only' => ["a,b\n", 'consents.csv', 'no data rows'],
-    'only blank rows' => ["a,b\n,\n\n", 'consents.csv', 'no data rows'],
+    'header only' => ["Consent code,Consent name,Description,Purpose,Version,Status\n", 'consents.csv', 'no data rows'],
+    'only blank rows' => ["Consent code,Consent name,Description,Purpose,Version,Status\n,\n\n", 'consents.csv', 'no data rows'],
+    'missing required columns' => ["a,b\n1,2\n", 'consents.csv', 'the header is missing the column(s) [Consent code, Consent name'],
     'duplicate column' => ["a,A\n1,2\n", 'consents.csv', 'the column [A] twice'],
     'unnamed column' => ["a,,c\n1,2,3\n", 'consents.csv', 'column 2 of the header has no name'],
 ]);
@@ -205,8 +206,8 @@ it('fails the import when the file is larger than the limit', function (): void 
 });
 
 it('fails the import when a row is larger than the limit, which usually means an unclosed quote', function (): void {
-    config(['bulk-imports.max_row_bytes' => 50]);
-    $import = importWithCsv("a,b\n\"never closed,".str_repeat('x', 100)."\n1,2\n");
+    config(['bulk-imports.max_row_bytes' => 80]);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n\"never closed,".str_repeat('x', 100)."\n1,2\n");
 
     parseImport($import);
 
@@ -215,7 +216,7 @@ it('fails the import when a row is larger than the limit, which usually means an
 });
 
 it('lets a storage failure be retried, leaving the import in parsing', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n");
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n");
     $this->mock(CsvChunker::class, fn (MockInterface $mock) => $mock->shouldReceive('split')->andThrow(new RuntimeException('MinIO is down')));
 
     expect(fn () => parseImport($import))->toThrow(RuntimeException::class, 'MinIO is down');
@@ -224,7 +225,7 @@ it('lets a storage failure be retried, leaving the import in parsing', function 
 });
 
 it('marks the import failed and removes its chunks when the last attempt fails', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n", status: BulkImportStatus::Parsing);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n", status: BulkImportStatus::Parsing);
     Storage::disk(config('bulk-imports.disk'))->put(chunkKey($import, 1), 'partial chunk');
 
     app(ParseImportHandler::class)->failed(parseEnvelope($import), new RuntimeException('MinIO is down'));
@@ -235,7 +236,7 @@ it('marks the import failed and removes its chunks when the last attempt fails',
 });
 
 it('does not fail an import that already finished parsing', function (): void {
-    $import = importWithCsv("phone,email\n1,a\n", status: BulkImportStatus::Validating);
+    $import = importWithCsv("Consent code,Consent name,Description,Purpose,Version,Status\n1,a\n", status: BulkImportStatus::Validating);
 
     app(ParseImportHandler::class)->failed(parseEnvelope($import), new RuntimeException('late failure'));
 

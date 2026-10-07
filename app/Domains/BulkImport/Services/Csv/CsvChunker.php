@@ -21,12 +21,13 @@ class CsvChunker
     private const int SAMPLE_BYTES = 8192;
 
     /**
+     * @param  list<string>  $requiredColumns  header names the file must contain, in any order and case
      * @return list<array{sequence: int, object_key: string}>
      *
      * @throws UnprocessableFile when the file can never be processed
      * @throws RuntimeException when storage fails, which a retry can fix
      */
-    public function split(string $sourceKey, ?string $originalFilename, string $chunkPrefix): array
+    public function split(string $sourceKey, ?string $originalFilename, string $chunkPrefix, array $requiredColumns = []): array
     {
         $disk = Storage::disk(config('bulk-imports.disk'));
 
@@ -38,7 +39,7 @@ class CsvChunker
         $rowsInChunk = 0;
 
         try {
-            $header = $this->header($source);
+            $header = $this->header($source, $requiredColumns);
             $rowNumber = 1;
 
             while (($record = $this->nextRecord($source, ++$rowNumber)) !== null) {
@@ -120,9 +121,10 @@ class CsvChunker
 
     /**
      * @param  resource  $source
+     * @param  list<string>  $requiredColumns
      * @return list<string>
      */
-    private function header($source): array
+    private function header($source, array $requiredColumns): array
     {
         $header = $this->nextRecord($source, 1);
 
@@ -144,6 +146,12 @@ class CsvChunker
             }
 
             $seen[strtolower($name)] = true;
+        }
+
+        $missing = array_filter($requiredColumns, fn (string $column): bool => ! isset($seen[strtolower($column)]));
+
+        if ($missing !== []) {
+            throw UnprocessableFile::because('the header is missing the column(s) ['.implode(', ', $missing).']');
         }
 
         return $header;

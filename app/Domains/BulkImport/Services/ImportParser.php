@@ -9,6 +9,7 @@ use App\Domains\BulkImport\Messages\ValidateChunk;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Domains\BulkImport\Models\BulkImportChunk;
 use App\Domains\BulkImport\Services\Csv\CsvChunker;
+use App\Domains\BulkImport\Services\Validation\RowRules;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
@@ -27,6 +28,7 @@ final class ImportParser
     public function __construct(
         private readonly CsvChunker $chunker,
         private readonly Outbox $outbox,
+        private readonly RowRules $rules,
     ) {}
 
     public function parse(ParseRequested $request): void
@@ -42,7 +44,7 @@ final class ImportParser
         $this->move($request, [BulkImportStatus::Queued], BulkImportStatus::Parsing);
 
         try {
-            $chunks = $this->chunker->split($request->sourceObjectKey, $import->original_filename, $this->chunkPrefix($request));
+            $chunks = $this->chunker->split($request->sourceObjectKey, $import->original_filename, $this->chunkPrefix($request), $this->rules->columns());
         } catch (UnprocessableFile $exception) {
             $this->fail($request, $exception->getMessage());
 
