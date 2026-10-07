@@ -50,7 +50,7 @@ function stored(?string $key): ?string
     return $key === null ? null : Storage::disk(config('bulk-imports.disk'))->get($key);
 }
 
-it('writes valid rows to a result file and rejected rows, with their reasons, to an error file', function (): void {
+it('writes only the rejected rows, with their position and reasons, to an error file', function (): void {
     $chunk = chunkWithRows([
         'A,Name A,,Purpose,1,Active',
         ',Name B,,Purpose,1,Active',
@@ -63,8 +63,10 @@ it('writes valid rows to a result file and rejected rows, with their reasons, to
     expect($chunk->status)->toBe(BulkImportChunkStatus::Completed)
         ->and($chunk->valid_rows)->toBe(1)
         ->and($chunk->invalid_rows)->toBe(2)
-        ->and($chunk->result_object_key)->toBe("consent/import-{$chunk->bulk_import_id}/results/chunk-000001.csv")
-        ->and(stored($chunk->result_object_key))->toBe("\"Consent code\",\"Consent name\",Description,Purpose,Version,Status\nA,\"Name A\",,Purpose,1,Active\n")
+        ->and($chunk->error_object_key)->toBe("consent/import-{$chunk->bulk_import_id}/errors/chunk-000001.csv")
+        ->and(Storage::disk(config('bulk-imports.disk'))->allFiles("consent/import-{$chunk->bulk_import_id}"))->toHaveCount(2)
+        ->and(stored($chunk->error_object_key))->toStartWith('Chunk,"Row in chunk",')
+        ->and(stored($chunk->error_object_key))->toContain('1,2,,"Name B"')
         ->and(stored($chunk->error_object_key))->toContain('Consent code is required')
         ->and(stored($chunk->error_object_key))->toContain('Version must be a positive whole number');
 });

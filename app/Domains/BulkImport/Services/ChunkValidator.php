@@ -18,12 +18,13 @@ use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 use RuntimeException;
 
 /**
- * Checks every row of one chunk against the schema. Valid rows go to a result file and
- * rejected rows, with the reasons, to an error file; a rejected row never fails the chunk.
+ * Checks every row of one chunk against the schema. Rejected rows are written, with their
+ * position in the chunk and the reasons, to an error file; the valid rows stay in the chunk
+ * file and are picked out later. A rejected row never fails the chunk.
  *
  * Safe to run more than once, and by several workers at once, for the same request:
  *  - a chunk that is already completed or failed is skipped;
- *  - result files have fixed names, so a retry overwrites them;
+ *  - the error file has a fixed name, so a retry overwrites it;
  *  - the chunk's final status and the hand-over to assembly commit together, and the
  *    import row is locked first, so chunks finishing at the same moment take turns and
  *    exactly one of them (the last) queues the assemble message.
@@ -31,6 +32,13 @@ use RuntimeException;
 final class ChunkValidator
 {
     private const int FAILURE_MESSAGE_MAX_LENGTH = 1000;
+
+    /** The first two columns of an error file; the assembler reads the row number from the second. */
+    public const string ERROR_FILE_CHUNK_COLUMN = 'Chunk';
+
+    public const string ERROR_FILE_ROW_COLUMN = 'Row in chunk';
+
+    public const int ERROR_FILE_ROW_POSITION = 1;
 
     public function __construct(
         private readonly RowRules $rules,
@@ -53,7 +61,7 @@ final class ChunkValidator
             ->update(['status' => BulkImportChunkStatus::Processing->value]);
 
         try {
-            $result = $this->checkRows($request->chunkObjectKey);
+            $result = $this->checkRows($request->chunkObjectKey, $chunk->sequence);
         } catch (UnprocessableFile $exception) {
             $this->fail($request, $exception->getMessage());
 
@@ -111,15 +119,15 @@ final class ChunkValidator
     }
 
     /**
-     * Streams the chunk, writes the valid and the rejected rows to their files and returns
-     * what to store on the chunk.
+     * Streams the chunk, writes the rejected rows to the error file and returns what to
+     * store on the chunk.
      *
-     * @return array{valid_rows: int, invalid_rows: int, result_object_key: string, error_object_key: string|null}
+     * @return array{valid_rows: int, invalid_rows: int, error_object_key: string|null}
      *
      * @throws UnprocessableFile when the chunk has no usable header
      * @throws RuntimeException when storage fails, which a retry can fix
      */
-    private function checkRows(string $chunkKey): array
+    private function checkRows(string $chunkKey, int $sequence): array
     {
         $disk = Storage::disk(config('bulk-imports.disk'));
         $source = $disk->readStream($chunkKey);
@@ -128,15 +136,13 @@ final class ChunkValidator
             throw new RuntimeException("Could not read [{$chunkKey}] from storage.");
         }
 
-        $valid = $this->temporaryFile();
         $rejected = $this->temporaryFile();
 
         try {
             $header = array_map(fn (?string $name): string => trim((string) $name), (array) fgetcsv($source, escape: ''));
             $positions = $this->columnPositions($header);
 
-            fputcsv($valid, $header, escape: '');
-            fputcsv($rejected, [...$header, 'Errors'], escape: '');
+            fputcsv($rejected, [self::ERROR_FILE_CHUNK_COLUMN, self::ERROR_FILE_ROW_COLUMN, ...$header, 'Errors'], escape: '');
 
             $validRows = 0;
             $invalidRows = 0;
@@ -146,10 +152,9 @@ final class ChunkValidator
                 $errors = $this->rowErrors($record, $header, $positions, $rowNumber, $firstRowOfKey);
 
                 if ($errors === []) {
-                    fputcsv($valid, $record, escape: '');
                     $validRows++;
                 } else {
-                    fputcsv($rejected, [...$record, implode('; ', $errors)], escape: '');
+                    fputcsv($rejected, [$sequence, $rowNumber, ...$record, implode('; ', $errors)], escape: '');
                     $invalidRows++;
                 }
             }
@@ -157,16 +162,13 @@ final class ChunkValidator
             return [
                 'valid_rows' => $validRows,
                 'invalid_rows' => $invalidRows,
-                'result_object_key' => $this->store($disk, $valid, $this->siblingKey($chunkKey, 'results')),
-                'error_object_key' => $invalidRows > 0 ? $this->store($disk, $rejected, $this->siblingKey($chunkKey, 'errors')) : null,
+                'error_object_key' => $invalidRows === 0 ? null : $this->store($disk, $rejected, $this->siblingKey($chunkKey, 'errors')),
             ];
         } finally {
             fclose($source);
 
-            foreach ([$valid, $rejected] as $file) {
-                if (is_resource($file)) {
-                    fclose($file);
-                }
+            if (is_resource($rejected)) {
+                fclose($rejected);
             }
         }
     }

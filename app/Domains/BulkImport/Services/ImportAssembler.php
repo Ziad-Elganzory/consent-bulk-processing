@@ -13,8 +13,8 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * Combines the validated chunks of an import into one result file and one error file,
- * and sets the import's final status.
+ * Builds the import's result file from its chunk files, leaving out the rejected rows,
+ * joins the chunks' error files into one, and sets the import's final status.
  *
  * Safe to run more than once for the same request: the output files have fixed names, so
  * a retry overwrites them, and only an import still assembling is finished, once.
@@ -32,15 +32,15 @@ final class ImportAssembler
         }
 
         $disk = Storage::disk(config('bulk-imports.disk'));
-        $resultKeys = [];
-        $errorKeys = [];
+        $resultSources = [];
+        $errorSources = [];
         $failedSequences = [];
         $hasRejectedRows = false;
 
         $chunks = BulkImportChunk::query()
             ->where('bulk_import_id', $import->getKey())
             ->orderBy('sequence')
-            ->get(['sequence', 'status', 'invalid_rows', 'result_object_key', 'error_object_key']);
+            ->get(['sequence', 'status', 'invalid_rows', 'source_object_key', 'error_object_key']);
 
         foreach ($chunks as $chunk) {
             if ($chunk->status === BulkImportChunkStatus::Failed) {
@@ -49,17 +49,17 @@ final class ImportAssembler
                 continue;
             }
 
-            $resultKeys[] = $chunk->result_object_key;
+            $resultSources[$chunk->source_object_key] = $chunk->error_object_key === null ? [] : $this->rejectedRowNumbers($disk, $chunk->error_object_key);
             $hasRejectedRows = $hasRejectedRows || $chunk->invalid_rows > 0;
 
             if ($chunk->error_object_key !== null) {
-                $errorKeys[] = $chunk->error_object_key;
+                $errorSources[$chunk->error_object_key] = [];
             }
         }
 
         $outputFolder = dirname($import->source_object_key, 2).'/output';
-        $resultKey = $resultKeys === [] ? null : $this->merge($disk, $resultKeys, "{$outputFolder}/result.csv");
-        $errorKey = $errorKeys === [] ? null : $this->merge($disk, $errorKeys, "{$outputFolder}/errors.csv");
+        $resultKey = $resultSources === [] ? null : $this->merge($disk, $resultSources, "{$outputFolder}/result.csv");
+        $errorKey = $errorSources === [] ? null : $this->merge($disk, $errorSources, "{$outputFolder}/errors.csv");
 
         BulkImport::query()
             ->whereKey($import->getKey())
@@ -88,12 +88,40 @@ final class ImportAssembler
     }
 
     /**
-     * Joins the files into one, keeping the header of the first. Each file is streamed, so
-     * memory stays bounded however many rows there are.
+     * The numbers of the chunk's rows that validation rejected, read from its error file.
      *
-     * @param  list<string>  $sourceKeys
+     * @return list<int>
      */
-    private function merge(Filesystem $disk, array $sourceKeys, string $targetKey): string
+    private function rejectedRowNumbers(Filesystem $disk, string $errorKey): array
+    {
+        $source = $disk->readStream($errorKey);
+
+        if (! is_resource($source)) {
+            throw new RuntimeException("Could not read [{$errorKey}] from storage.");
+        }
+
+        try {
+            fgetcsv($source, escape: '');
+            $rows = [];
+
+            while (($record = fgetcsv($source, escape: '')) !== false) {
+                $rows[] = (int) $record[ChunkValidator::ERROR_FILE_ROW_POSITION];
+            }
+
+            return $rows;
+        } finally {
+            fclose($source);
+        }
+    }
+
+    /**
+     * Joins the files into one, keeping the header of the first and leaving out the listed
+     * rows of each file. Each file is streamed, so memory stays bounded however many rows
+     * there are.
+     *
+     * @param  array<string, list<int>>  $sources  object key => numbers of the rows to leave out
+     */
+    private function merge(Filesystem $disk, array $sources, string $targetKey): string
     {
         $merged = tmpfile();
 
@@ -102,7 +130,9 @@ final class ImportAssembler
         }
 
         try {
-            foreach ($sourceKeys as $position => $sourceKey) {
+            $first = true;
+
+            foreach ($sources as $sourceKey => $skippedRows) {
                 $source = $disk->readStream($sourceKey);
 
                 if (! is_resource($source)) {
@@ -112,11 +142,12 @@ final class ImportAssembler
                 try {
                     $header = (string) fgets($source);
 
-                    if ($position === 0) {
+                    if ($first) {
                         fwrite($merged, $header);
+                        $first = false;
                     }
 
-                    stream_copy_to_stream($source, $merged);
+                    $this->copyRows($source, $merged, array_flip($skippedRows));
                 } finally {
                     fclose($source);
                 }
@@ -132,5 +163,25 @@ final class ImportAssembler
         }
 
         return $targetKey;
+    }
+
+    /**
+     * @param  resource  $source
+     * @param  resource  $target
+     * @param  array<int, int>  $skippedRows  row numbers as keys, counted from 1 after the header
+     */
+    private function copyRows($source, $target, array $skippedRows): void
+    {
+        if ($skippedRows === []) {
+            stream_copy_to_stream($source, $target);
+
+            return;
+        }
+
+        for ($rowNumber = 1; ($record = fgetcsv($source, escape: '')) !== false; $rowNumber++) {
+            if (! isset($skippedRows[$rowNumber])) {
+                fputcsv($target, $record, escape: '');
+            }
+        }
     }
 }

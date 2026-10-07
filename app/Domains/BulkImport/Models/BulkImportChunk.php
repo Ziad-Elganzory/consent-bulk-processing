@@ -18,7 +18,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'valid_rows',
     'invalid_rows',
     'source_object_key',
-    'result_object_key',
     'error_object_key',
     'failure_message',
 ])]

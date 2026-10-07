@@ -29,15 +29,16 @@ function assemblingImport(): BulkImport
     return $import->refresh();
 }
 
-function validatedChunk(BulkImport $import, int $sequence, string $result, ?string $errors = null, BulkImportChunkStatus $status = BulkImportChunkStatus::Completed): BulkImportChunk
+/**
+ * @param  string|null  $errors  the chunk's error file, whose rows say which chunk rows were rejected
+ */
+function validatedChunk(BulkImport $import, int $sequence, string $contents, ?string $errors = null, BulkImportChunkStatus $status = BulkImportChunkStatus::Completed): BulkImportChunk
 {
     $disk = Storage::disk(config('bulk-imports.disk'));
-    $resultKey = "consent/import-{$import->getKey()}/results/chunk-{$sequence}.csv";
+    $chunkKey = "consent/import-{$import->getKey()}/chunks/chunk-{$sequence}.csv";
     $errorKey = $errors === null ? null : "consent/import-{$import->getKey()}/errors/chunk-{$sequence}.csv";
 
-    if ($status === BulkImportChunkStatus::Completed) {
-        $disk->put($resultKey, $result);
-    }
+    $disk->put($chunkKey, $contents);
 
     if ($errorKey !== null) {
         $disk->put($errorKey, $errors);
@@ -47,8 +48,8 @@ function validatedChunk(BulkImport $import, int $sequence, string $result, ?stri
         'bulk_import_id' => $import->getKey(),
         'sequence' => $sequence,
         'status' => $status,
-        'invalid_rows' => $errors === null ? 0 : 1,
-        'result_object_key' => $status === BulkImportChunkStatus::Completed ? $resultKey : null,
+        'invalid_rows' => $errors === null ? 0 : max(1, substr_count($errors, "\n") - 1),
+        'source_object_key' => $chunkKey,
         'error_object_key' => $errorKey,
     ]);
 }
@@ -63,9 +64,9 @@ function storedFile(?string $key): ?string
     return $key === null ? null : Storage::disk(config('bulk-imports.disk'))->get($key);
 }
 
-it('merges the chunk results in sequence order under one header, and finishes with errors when rows were rejected', function (): void {
+it('builds the result from the chunk files in sequence order, without the rejected rows, and finishes with errors', function (): void {
     $import = assemblingImport();
-    validatedChunk($import, 2, "h1,h2\nc,2\n", "h1,h2,Errors\nbad,2,oops\n");
+    validatedChunk($import, 2, "h1,h2\nbad,2\nc,2\n", "Chunk,Row in chunk,h1,h2,Errors\n2,1,bad,2,oops\n");
     validatedChunk($import, 1, "h1,h2\na,1\nb,1\n");
 
     assembleImport($import);
@@ -75,7 +76,7 @@ it('merges the chunk results in sequence order under one header, and finishes wi
         ->and($import->completed_at)->not->toBeNull()
         ->and($import->output_object_key)->toBe("consent/import-{$import->getKey()}/output/result.csv")
         ->and(storedFile($import->output_object_key))->toBe("h1,h2\na,1\nb,1\nc,2\n")
-        ->and(storedFile($import->error_object_key))->toBe("h1,h2,Errors\nbad,2,oops\n");
+        ->and(storedFile($import->error_object_key))->toBe("Chunk,Row in chunk,h1,h2,Errors\n2,1,bad,2,oops\n");
 });
 
 it('finishes completed, without an error file, when no row was rejected', function (): void {
