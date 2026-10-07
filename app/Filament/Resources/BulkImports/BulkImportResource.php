@@ -5,6 +5,8 @@ namespace App\Filament\Resources\BulkImports;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\Pages\CreateBulkImport;
 use App\Filament\Resources\BulkImports\Pages\ListBulkImports;
+use App\Filament\Resources\BulkImports\Pages\ViewBulkImport;
+use App\Filament\Resources\BulkImports\RelationManagers\ChunksRelationManager;
 use App\Filament\Resources\BulkImports\Schemas\BulkImportForm;
 use App\Filament\Resources\BulkImports\Schemas\BulkImportInfolist;
 use App\Filament\Resources\BulkImports\Tables\BulkImportsTable;
@@ -41,7 +43,7 @@ class BulkImportResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            ChunksRelationManager::class,
         ];
     }
 
@@ -50,6 +52,7 @@ class BulkImportResource extends Resource
         return [
             'index' => ListBulkImports::route('/'),
             'create' => CreateBulkImport::route('/create'),
+            'view' => ViewBulkImport::route('/{record}'),
         ];
     }
 

@@ -45,6 +45,16 @@ class BulkImportChunk extends Model
         ];
     }
 
+    /**
+     * The statuses a chunk ends in, as stored values.
+     *
+     * @return list<string>
+     */
+    public static function finishedStatuses(): array
+    {
+        return [BulkImportChunkStatus::Completed->value, BulkImportChunkStatus::Failed->value];
+    }
+
     public function bulkImport(): BelongsTo
     {
         return $this->belongsTo(BulkImport::class);
