@@ -72,30 +72,6 @@ return [
             'block_for' => null,
             'after_commit' => false,
         ],
-        'rabbitmq' => [
-            'driver' => 'rabbitmq',
-            'queue' => env('RABBITMQ_QUEUE', 'default'),
-            'connection' => env('RABBITMQ_CONNECTION', 'default'),
-            'worker' => env('RABBITMQ_WORKER', 'default'),
-            'hosts' => [
-                [
-                    'host' => env('RABBITMQ_HOST', '127.0.0.1'),
-                    'port' => (int) env('RABBITMQ_PORT', 5672),
-                    'user' => env('RABBITMQ_USER', 'guest'),
-                    'password' => env('RABBITMQ_PASSWORD', 'guest'),
-                    'vhost' => env('RABBITMQ_VHOST', '/'),
-                ],
-            ],
-            // Consumers keep the connection alive with heartbeats. php-amqplib requires
-            // read and write timeouts of at least twice the heartbeat.
-            'options' => [
-                'heartbeat' => (int) env('RABBITMQ_HEARTBEAT', 60),
-                'read_timeout' => (int) env('RABBITMQ_HEARTBEAT', 60) * 2 + 10,
-                'write_timeout' => (int) env('RABBITMQ_HEARTBEAT', 60) * 2 + 10,
-            ],
-            'after_commit' => false,
-        ],
-
         'deferred' => [
             'driver' => 'deferred',
         ],

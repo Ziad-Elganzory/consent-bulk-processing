@@ -14,8 +14,7 @@
         "laravel/framework": "^13.17",
         "laravel/tinker": "^3.0",
         "league/flysystem-aws-s3-v3": "^3.0",
-        "nwidart/laravel-modules": "^13.0",
-        "vladimir-yuldashev/laravel-queue-rabbitmq": "^15.0"
+        "nwidart/laravel-modules": "^13.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -82,6 +81,11 @@
     "extra": {
         "laravel": {
             "dont-discover": []
+        },
+        "merge-plugin": {
+            "include": [
+                "Modules/*/composer.json"
+            ]
         }
     },
     "config": {

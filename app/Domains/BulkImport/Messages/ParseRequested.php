@@ -2,28 +2,34 @@
 
 namespace App\Domains\BulkImport\Messages;
 
-use App\Infrastructure\Messaging\Protocol\MessageContract;
-use App\Infrastructure\Messaging\Protocol\MessageFields;
+use InvalidArgumentException;
+use Modules\Core\Features\RabbitMQ\Contracts\Message;
 
-final readonly class ParseRequested implements MessageContract
+/**
+ * Asks the parse worker to split an uploaded CSV into chunks.
+ */
+final readonly class ParseRequested implements Message
 {
     public function __construct(
         public string $bulkImportId,
         public string $sourceObjectKey,
     ) {
-        MessageFields::nonEmpty($this->bulkImportId, 'bulk_import_id');
-        MessageFields::nonEmpty($this->sourceObjectKey, 'source_object_key');
+        if ($bulkImportId === '' || $sourceObjectKey === '') {
+            throw new InvalidArgumentException('A parse request needs an import id and a source object key.');
+        }
     }
 
-    public static function type(): string
+    public function exchange(): string
+    {
+        return config('bulk-imports.messaging.exchange');
+    }
+
+    public function routingKey(): string
     {
         return config('bulk-imports.messaging.routing_keys.parse_requested');
     }
 
-    /**
-     * @return array{bulk_import_id: string, source_object_key: string}
-     */
-    public function data(): array
+    public function toPayload(): array
     {
         return [
             'bulk_import_id' => $this->bulkImportId,
@@ -31,16 +37,11 @@ final readonly class ParseRequested implements MessageContract
         ];
     }
 
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public static function fromData(array $data): static
+    public static function fromPayload(array $payload): static
     {
-        $fields = new MessageFields($data);
-
         return new self(
-            bulkImportId: $fields->text('bulk_import_id'),
-            sourceObjectKey: $fields->text('source_object_key'),
+            bulkImportId: (string) ($payload['bulk_import_id'] ?? ''),
+            sourceObjectKey: (string) ($payload['source_object_key'] ?? ''),
         );
     }
 }

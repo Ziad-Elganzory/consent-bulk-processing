@@ -26,6 +26,58 @@ services:
             - redis
             - rabbitmq
             - minio
+    relay:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        command: 'php artisan rabbitmq:relay-outbox'
+        restart: unless-stopped
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            mysql:
+                condition: service_healthy
+            rabbitmq:
+                condition: service_healthy
+    worker:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        # Runs and auto-scales a consumer per queue named here. Only the parse queue has a real
+        # handler so far; add the others as their handlers are built.
+        command: 'php artisan rabbitmq:work --queue=${BULK_IMPORT_PARSE_QUEUE:-consent.parse}'
+        restart: unless-stopped
+        # Lets consumers finish the message in hand (up to 120 s) before the container is killed.
+        stop_grace_period: 130s
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            mysql:
+                condition: service_healthy
+            rabbitmq:
+                condition: service_healthy
+            minio:
+                condition: service_healthy
     mysql:
         image: 'mysql:8.4'
         ports:

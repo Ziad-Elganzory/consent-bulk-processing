@@ -2,30 +2,35 @@
 
 namespace App\Domains\BulkImport\Messages;
 
-use App\Infrastructure\Messaging\Protocol\MessageContract;
-use App\Infrastructure\Messaging\Protocol\MessageFields;
+use InvalidArgumentException;
+use Modules\Core\Features\RabbitMQ\Contracts\Message;
 
-final readonly class ValidateChunk implements MessageContract
+/**
+ * Asks a validation worker to check one chunk of an import.
+ */
+final readonly class ValidateChunk implements Message
 {
     public function __construct(
         public string $bulkImportId,
         public string $chunkId,
         public string $chunkObjectKey,
     ) {
-        MessageFields::nonEmpty($this->bulkImportId, 'bulk_import_id');
-        MessageFields::nonEmpty($this->chunkId, 'chunk_id');
-        MessageFields::nonEmpty($this->chunkObjectKey, 'chunk_object_key');
+        if ($bulkImportId === '' || $chunkId === '' || $chunkObjectKey === '') {
+            throw new InvalidArgumentException('A chunk validation request needs an import id, a chunk id and a chunk object key.');
+        }
     }
 
-    public static function type(): string
+    public function exchange(): string
+    {
+        return config('bulk-imports.messaging.exchange');
+    }
+
+    public function routingKey(): string
     {
         return config('bulk-imports.messaging.routing_keys.validate_chunk');
     }
 
-    /**
-     * @return array{bulk_import_id: string, chunk_id: string, chunk_object_key: string}
-     */
-    public function data(): array
+    public function toPayload(): array
     {
         return [
             'bulk_import_id' => $this->bulkImportId,
@@ -34,17 +39,12 @@ final readonly class ValidateChunk implements MessageContract
         ];
     }
 
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public static function fromData(array $data): static
+    public static function fromPayload(array $payload): static
     {
-        $fields = new MessageFields($data);
-
         return new self(
-            bulkImportId: $fields->text('bulk_import_id'),
-            chunkId: $fields->text('chunk_id'),
-            chunkObjectKey: $fields->text('chunk_object_key'),
+            bulkImportId: (string) ($payload['bulk_import_id'] ?? ''),
+            chunkId: (string) ($payload['chunk_id'] ?? ''),
+            chunkObjectKey: (string) ($payload['chunk_object_key'] ?? ''),
         );
     }
 }

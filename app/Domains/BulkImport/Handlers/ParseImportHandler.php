@@ -9,12 +9,11 @@ use App\Domains\BulkImport\Messages\ValidateChunk;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Domains\BulkImport\Models\BulkImportChunk;
 use App\Domains\BulkImport\Services\Csv\CsvChunker;
-use App\Infrastructure\Messaging\Contracts\MessageHandler;
-use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
-use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use InvalidArgumentException;
+use Modules\Core\Features\RabbitMQ\Contracts\MessageHandler;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 use Throwable;
 
 /**
@@ -30,11 +29,14 @@ final class ParseImportHandler implements MessageHandler
 {
     private const int FAILURE_MESSAGE_MAX_LENGTH = 1000;
 
-    public function __construct(private readonly CsvChunker $chunker) {}
+    public function __construct(
+        private readonly CsvChunker $chunker,
+        private readonly Outbox $outbox,
+    ) {}
 
-    public function handle(MessageEnvelope $envelope): void
+    public function handle(Envelope $envelope): void
     {
-        $message = $this->message($envelope);
+        $message = ParseRequested::fromPayload($envelope->payload);
         $import = BulkImport::query()->find($message->bulkImportId);
 
         // Queued: start it. Parsing: an earlier attempt stopped part way, so redo it.
@@ -74,17 +76,14 @@ final class ParseImportHandler implements MessageHandler
                     'source_object_key' => $chunk['object_key'],
                 ]);
 
-                OutboxMessage::enqueue(MessageEnvelope::make(
-                    message: new ValidateChunk($message->bulkImportId, $chunkRow->getKey(), $chunk['object_key']),
-                    correlationId: $message->bulkImportId,
-                ));
+                $this->outbox->record(new ValidateChunk($message->bulkImportId, $chunkRow->getKey(), $chunk['object_key']));
             }
         });
     }
 
-    public function failed(MessageEnvelope $envelope, Throwable $exception): void
+    public function failed(Envelope $envelope, Throwable $exception): void
     {
-        $this->fail($this->message($envelope), "Parsing failed: {$exception->getMessage()}");
+        $this->fail(ParseRequested::fromPayload($envelope->payload), "Parsing failed: {$exception->getMessage()}");
     }
 
     /**
@@ -102,13 +101,6 @@ final class ParseImportHandler implements MessageHandler
                 'status' => BulkImportStatus::Failed->value,
                 'failure_message' => Str::limit($reason, self::FAILURE_MESSAGE_MAX_LENGTH),
             ]);
-    }
-
-    private function message(MessageEnvelope $envelope): ParseRequested
-    {
-        return $envelope->message instanceof ParseRequested
-            ? $envelope->message
-            : throw new InvalidArgumentException("ParseImportHandler cannot handle [{$envelope->type()}] messages.");
     }
 
     /**

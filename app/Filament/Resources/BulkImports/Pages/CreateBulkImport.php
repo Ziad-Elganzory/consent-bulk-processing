@@ -6,8 +6,6 @@ use App\Domains\BulkImport\Enums\BulkImportStatus;
 use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\BulkImportResource;
-use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
-use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +13,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Locked;
+use Modules\Core\Features\RabbitMQ\Publishing\Outbox;
 use Override;
 use Throwable;
 
@@ -63,12 +62,9 @@ class CreateBulkImport extends CreateRecord
                 $record->setAttribute($record->getKeyName(), $this->uploadId);
                 $record->save();
 
-                OutboxMessage::enqueue(MessageEnvelope::make(
-                    message: new ParseRequested(
-                        bulkImportId: (string) $record->getKey(),
-                        sourceObjectKey: $sourceObjectKey,
-                    ),
-                    correlationId: (string) $record->getKey(),
+                app(Outbox::class)->record(new ParseRequested(
+                    bulkImportId: (string) $record->getKey(),
+                    sourceObjectKey: $sourceObjectKey,
                 ));
 
                 return $record;

@@ -1,17 +1,16 @@
 <?php
 
 use App\Domains\BulkImport\Enums\BulkImportStatus;
-use App\Domains\BulkImport\Messages\ParseRequested;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Filament\Resources\BulkImports\Pages\CreateBulkImport;
 use App\Filament\Resources\BulkImports\Pages\ListBulkImports;
-use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Modules\Core\Features\RabbitMQ\Models\OutboxMessage;
 
 uses(RefreshDatabase::class);
 
@@ -42,16 +41,14 @@ it('creates a queued import owned by the user and writes an outbox message', fun
     Storage::disk(config('bulk-imports.disk'))->assertExists($import->source_object_key);
 
     $outbox = OutboxMessage::query()->sole();
-    $envelope = $outbox->envelope();
 
-    expect($outbox->routing_key)->toBe(ParseRequested::type())
+    expect($outbox->exchange)->toBe(config('bulk-imports.messaging.exchange'))
+        ->and($outbox->routing_key)->toBe(config('bulk-imports.messaging.routing_keys.parse_requested'))
         ->and($outbox->published_at)->toBeNull()
-        ->and($envelope->messageId)->toBe($outbox->getKey())
-        ->and($envelope->type())->toBe($outbox->routing_key)
-        ->and($envelope->correlationId)->toBe($import->getKey())
-        ->and($envelope->message)->toBeInstanceOf(ParseRequested::class)
-        ->and($envelope->message->bulkImportId)->toBe($import->getKey())
-        ->and($envelope->message->sourceObjectKey)->toBe($import->source_object_key);
+        ->and($outbox->payload)->toBe([
+            'bulk_import_id' => $import->getKey(),
+            'source_object_key' => $import->source_object_key,
+        ]);
 });
 
 it('rejects files that are not csv', function (): void {

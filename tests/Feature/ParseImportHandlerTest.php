@@ -3,15 +3,14 @@
 use App\Domains\BulkImport\Enums\BulkImportStatus;
 use App\Domains\BulkImport\Handlers\ParseImportHandler;
 use App\Domains\BulkImport\Messages\ParseRequested;
-use App\Domains\BulkImport\Messages\ValidateChunk;
 use App\Domains\BulkImport\Models\BulkImport;
 use App\Domains\BulkImport\Models\BulkImportChunk;
 use App\Domains\BulkImport\Services\Csv\CsvChunker;
-use App\Infrastructure\Messaging\Outbox\Models\OutboxMessage;
-use App\Infrastructure\Messaging\Protocol\MessageEnvelope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Mockery\MockInterface;
+use Modules\Core\Features\RabbitMQ\Messages\Envelope;
+use Modules\Core\Features\RabbitMQ\Models\OutboxMessage;
 
 uses(RefreshDatabase::class);
 
@@ -33,12 +32,12 @@ function importWithCsv(?string $contents, string $filename = 'consents.csv', Bul
     return $import->refresh();
 }
 
-function parseEnvelope(BulkImport $import): MessageEnvelope
+function parseEnvelope(BulkImport $import): Envelope
 {
-    return MessageEnvelope::make(new ParseRequested($import->getKey(), $import->source_object_key), $import->getKey());
+    return Envelope::wrap(new ParseRequested($import->getKey(), $import->source_object_key));
 }
 
-function parseImport(BulkImport $import, ?MessageEnvelope $envelope = null): void
+function parseImport(BulkImport $import, ?Envelope $envelope = null): void
 {
     app(ParseImportHandler::class)->handle($envelope ?? parseEnvelope($import));
 }
@@ -65,15 +64,15 @@ it('splits the file into chunks that each start with the header, and queues one 
         ->and(chunkContents($import, 3))->toBeNull();
 
     $chunks = BulkImportChunk::query()->orderBy('sequence')->get();
-    $messages = OutboxMessage::query()->get()->map->envelope();
+    $messages = OutboxMessage::query()->get();
 
     expect($chunks->pluck('sequence')->all())->toBe([1, 2])
         ->and($chunks->pluck('source_object_key')->all())->toBe([chunkKey($import, 1), chunkKey($import, 2)])
         ->and($messages)->toHaveCount(2)
-        ->and($messages->every(fn (MessageEnvelope $envelope) => $envelope->message instanceof ValidateChunk))->toBeTrue()
-        ->and($messages->map(fn (MessageEnvelope $envelope) => $envelope->message->chunkId)->sort()->values()->all())
-        ->toBe($chunks->pluck('id')->sort()->values()->all())
-        ->and($messages->first()->correlationId)->toBe($import->getKey());
+        ->and($messages->pluck('exchange')->unique()->all())->toBe([config('bulk-imports.messaging.exchange')])
+        ->and($messages->pluck('routing_key')->unique()->all())->toBe([config('bulk-imports.messaging.routing_keys.validate_chunk')])
+        ->and($messages->pluck('payload.chunk_id')->sort()->values()->all())->toBe($chunks->pluck('id')->sort()->values()->all())
+        ->and($messages->pluck('payload.bulk_import_id')->unique()->all())->toBe([$import->getKey()]);
 });
 
 it('starts a new chunk when the byte limit is reached', function (): void {

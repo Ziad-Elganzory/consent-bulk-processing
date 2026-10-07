@@ -6,29 +6,24 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('outbox_messages', function (Blueprint $table) {
+            // UUID v7: also the published message_id, and its order is the publishing order.
             $table->uuid('id')->primary();
-            $table->string('routing_key', 128);
+            $table->string('exchange');
+            $table->string('routing_key');
             $table->json('payload');
-            $table->timestamp('available_at')->useCurrent();
-            $table->unsignedSmallInteger('attempt_count')->default(0);
-            $table->timestamp('locked_until')->nullable();
-            $table->timestamp('published_at')->nullable();
+            // Failed publish attempts; the relay keeps retrying, these explain why it is stuck.
+            $table->unsignedInteger('failed_attempts')->default(0);
             $table->text('last_error')->nullable();
-            $table->timestamps();
+            $table->timestamp('created_at');
+            $table->timestamp('published_at')->nullable();
 
-            $table->index(['published_at', 'available_at']);
+            $table->index(['published_at', 'id']);
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('outbox_messages');

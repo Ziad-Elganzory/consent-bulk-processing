@@ -33,16 +33,4 @@ return [
             'prefetch' => (int) env('BULK_IMPORT_CONSUMER_PREFETCH', 1),
         ],
     ],
-
-    'outbox' => [
-        'batch_size' => (int) env('OUTBOX_BATCH_SIZE', 10),
-        // The longest the relay waits for the broker to confirm one message.
-        'publish_timeout_seconds' => (int) env('OUTBOX_PUBLISH_TIMEOUT_SECONDS', 5),
-        // Added to batch_size * publish_timeout_seconds to get the lease on a claimed row.
-        'lease_buffer_seconds' => (int) env('OUTBOX_LEASE_BUFFER_SECONDS', 10),
-        // How long rows wait after the broker was unreachable. These retries do not count as attempts.
-        'broker_retry_seconds' => (int) env('OUTBOX_BROKER_RETRY_SECONDS', 5),
-        // Failures caused by the message itself. Rows that reach this are parked.
-        'max_attempts' => (int) env('OUTBOX_MAX_ATTEMPTS', 10),
-    ],
 ];

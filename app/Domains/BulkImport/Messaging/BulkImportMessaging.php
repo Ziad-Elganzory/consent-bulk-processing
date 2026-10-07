@@ -2,57 +2,52 @@
 
 namespace App\Domains\BulkImport\Messaging;
 
+use App\Domains\BulkImport\Handlers\AssembleImportHandler;
 use App\Domains\BulkImport\Handlers\ParseImportHandler;
-use App\Domains\BulkImport\Messages\ParseRequested;
-use App\Domains\BulkImport\Messages\ValidateChunk;
-use App\Infrastructure\Messaging\Contracts\DeclaresMessaging;
-use App\Infrastructure\Messaging\Contracts\MessageHandler;
-use App\Infrastructure\Messaging\Topology\ExchangeDefinition;
-use App\Infrastructure\Messaging\Topology\QueueDefinition;
+use App\Domains\BulkImport\Handlers\ValidateChunkHandler;
+use Modules\Core\Features\RabbitMQ\Contracts\MessageHandler;
+use Modules\Core\Features\RabbitMQ\Contracts\ModuleMessaging;
+use Modules\Core\Features\RabbitMQ\Topology\ExchangeDefinition;
+use Modules\Core\Features\RabbitMQ\Topology\ExchangeType;
+use Modules\Core\Features\RabbitMQ\Topology\QueueDefinition;
 
 /**
  * What the bulk import pipeline publishes and consumes. Names and consumer settings
  * come from config('bulk-imports.messaging').
  */
-final class BulkImportMessaging implements DeclaresMessaging
+final class BulkImportMessaging implements ModuleMessaging
 {
     public function exchanges(): array
     {
-        return [new ExchangeDefinition(config('bulk-imports.messaging.exchange'))];
+        return [new ExchangeDefinition(config('bulk-imports.messaging.exchange'), ExchangeType::Direct)];
     }
 
     public function queues(): array
     {
-        // The validate and assemble handlers are added as those workers are built.
         return [
-            $this->queue('parse', [ParseRequested::type()], ParseImportHandler::class),
-            $this->queue('validate', [ValidateChunk::type()]),
-            $this->queue('assemble', [config('bulk-imports.messaging.routing_keys.assemble_import')]),
+            $this->queue('parse', 'parse_requested', ParseImportHandler::class),
+            $this->queue('validate', 'validate_chunk', ValidateChunkHandler::class),
+            $this->queue('assemble', 'assemble_import', AssembleImportHandler::class),
         ];
     }
 
-    public function messages(): array
-    {
-        return [ParseRequested::class, ValidateChunk::class];
-    }
-
     /**
-     * @param  string  $key  the queue's key under messaging.queues
-     * @param  list<string>  $routingKeys
-     * @param  class-string<MessageHandler>|null  $handler
+     * @param  string  $queue  the queue's key under messaging.queues
+     * @param  string  $routingKey  the message's key under messaging.routing_keys
+     * @param  class-string<MessageHandler>  $handler
      */
-    private function queue(string $key, array $routingKeys, ?string $handler = null): QueueDefinition
+    private function queue(string $queue, string $routingKey, string $handler): QueueDefinition
     {
         $messaging = config('bulk-imports.messaging');
 
         return new QueueDefinition(
-            name: $messaging['queues'][$key],
+            name: $messaging['queues'][$queue],
             exchange: $messaging['exchange'],
-            routingKeys: $routingKeys,
+            routingKeys: [$messaging['routing_keys'][$routingKey]],
+            handler: $handler,
             maxAttempts: $messaging['consumers']['max_attempts'],
             retryDelaySeconds: $messaging['consumers']['retry_delay_seconds'],
             prefetch: $messaging['consumers']['prefetch'],
-            handler: $handler,
         );
     }
 }
